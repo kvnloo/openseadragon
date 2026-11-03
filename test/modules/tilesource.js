@@ -1,4 +1,4 @@
-/* global QUnit, testLog, Util */
+/* global QUnit, $, testLog, Util */
 (function() {
 
     QUnit.module('TileSource', {
@@ -7,6 +7,47 @@
         }
     });
 
+
+    QUnit.test('viewer timeout applies to tile source metadata requests', function(assert) {
+        const done = assert.async();
+        $('<div id="tile-source-timeout"></div>').appendTo('#qunit-fixture');
+
+        const viewer = OpenSeadragon({
+            id: 'tile-source-timeout',
+            prefixUrl: '/build/openseadragon/images/',
+            timeout: 12000,
+            drawer: 'canvas'
+        });
+        const originalMakeAjaxRequest = OpenSeadragon.makeAjaxRequest;
+        let metadataTimeoutOption;
+        let metadataXhrTimeout;
+
+        OpenSeadragon.makeAjaxRequest = function(options) {
+            const request = originalMakeAjaxRequest.apply(this, arguments);
+            if (options.url === '/test/data/testpattern.dzi') {
+                metadataTimeoutOption = options.timeout;
+                metadataXhrTimeout = request.timeout;
+            }
+            return request;
+        };
+
+        const finish = function(error) {
+            OpenSeadragon.makeAjaxRequest = originalMakeAjaxRequest;
+            assert.notOk(error, 'tile source metadata loaded');
+            assert.strictEqual(metadataTimeoutOption, 12000, 'viewer timeout forwarded to metadata request');
+            assert.strictEqual(metadataXhrTimeout, 12000, 'native XHR timeout is set');
+            viewer.destroy();
+            done();
+        };
+
+        viewer.instantiateTileSourceClass({
+            tileSource: '/test/data/testpattern.dzi'
+        }).then(function() {
+            finish(null);
+        }, function(error) {
+            finish(error && (error.message || 'metadata request failed'));
+        });
+    });
 
     QUnit.test("should set sane tile size defaults", function(assert) {
         const source = new OpenSeadragon.TileSource();
