@@ -294,11 +294,10 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
         let sketchScale;
         let sketchTranslate;
 
-        const zoom = this.viewport.getZoom(true);
-        const imageZoom = tiledImage.viewportToImageZoom(zoom);
-
+        // Image zoom is only needed when multiple tiles require edge smoothing.
+        // Avoid the two conversions for the common single-tile draw.
         if (lastDrawn.length > 1 &&
-            imageZoom > tiledImage.smoothTileEdgesMinZoom &&
+            tiledImage.viewportToImageZoom(this.viewport.getZoom(true)) > tiledImage.smoothTileEdgesMinZoom &&
             !tiledImage.iOSDevice &&
             tiledImage.getRotation(true) % 360 === 0 ){ // TODO: support tile edge smoothing with tiled image rotation.
             // When zoomed in a lot (>100%) the tile edges are visible.
