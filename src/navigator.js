@@ -206,8 +206,8 @@ $.Navigator = function( options ){
         this.setHeight(options.height);
     } else if ( this._resizeWithViewer ) {
         viewerSize = $.getElementSize( viewer.element );
-        this.element.style.height = Math.round( viewerSize.y * options.sizeRatio ) + 'px';
-        this.element.style.width  = Math.round( viewerSize.x * options.sizeRatio ) + 'px';
+        this.element.style.height = viewerSize.y * options.sizeRatio + 'px';
+        this.element.style.width  = viewerSize.x * options.sizeRatio + 'px';
         this.oldViewerSize = viewerSize;
         navigatorSize = $.getElementSize( this.element );
         this.elementArea = navigatorSize.x * navigatorSize.y;
@@ -379,8 +379,8 @@ $.extend( $.Navigator.prototype, $.EventSource.prototype, $.Viewer.prototype, /*
                 newHeight = this.elementArea / newWidth;
             }
 
-            this.element.style.width  = Math.round( newWidth ) + 'px';
-            this.element.style.height = Math.round( newHeight ) + 'px';
+            this.element.style.width  = newWidth + 'px';
+            this.element.style.height = newHeight + 'px';
 
             if (!this.elementArea) {
                 this.elementArea = newWidth * newHeight;
