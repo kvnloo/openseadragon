@@ -53,6 +53,7 @@
             sources: 2,
             seed: 17,
             steps: 3,
+            conversionBackpressure: true,
             samples: [
                 { update: 2, draw: 4, frame: 7 },
                 { update: 4, draw: 6, frame: 11 }
@@ -62,11 +63,12 @@
         });
 
         assert.deepEqual(Object.keys(summary), [
-            'version', 'drawer', 'sources', 'seed', 'steps', 'frames',
+            'version', 'drawer', 'sources', 'seed', 'steps', 'conversionBackpressure', 'frames',
             'update', 'draw', 'frame', 'counters', 'userAgent'
         ], 'summary has the requested top-level fields');
         assert.strictEqual(summary.version, 1, 'stable schema version');
         assert.strictEqual(summary.drawer, 'webgl', 'drawer reported');
+        assert.strictEqual(summary.conversionBackpressure, true, 'A/B mode reported');
         assert.strictEqual(summary.frames, 2, 'actual sampled frame count');
         assert.strictEqual(summary.update.median, 3, 'update median');
         assert.strictEqual(summary.update.max, 4, 'update max');
@@ -88,5 +90,9 @@
             drawer: 'canvas', sources: 1, seed: 0, steps: 0,
             samples: [], counters: {}, userAgent: 'QUnit'
         }).frame.median, null, 'empty frame list remains serializable');
+        assert.strictEqual(bench.makeSummary({
+            drawer: 'webgl', sources: 1, seed: 0, steps: 0,
+            samples: [], counters: {}, userAgent: 'QUnit'
+        }).conversionBackpressure, false, 'default A/B mode is off');
     });
 })();
