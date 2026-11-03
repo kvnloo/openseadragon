@@ -789,7 +789,7 @@ $.Viewport.prototype = {
             this._contentBounds.x,
             this._contentBounds.y + (this._contentBounds.height / 2),
             this._contentBounds.width,
-            0);
+            0).rotate(-this.getRotation());
         return this.fitBounds(box, immediately);
     },
 
