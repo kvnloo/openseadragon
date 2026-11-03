@@ -770,6 +770,30 @@
         viewer.open(TALL_PATH);
     });
 
+    QUnit.test('fitHorizontally with viewport rotation', function(assert) {
+        const done = assert.async();
+        const openHandler = function() {
+            viewer.removeHandler('open', openHandler);
+            const viewport = viewer.viewport;
+            viewport.resize(new OpenSeadragon.Point(800, 400), true);
+            viewport.setRotation(90, true);
+            viewport.fitHorizontally(true);
+
+            assert.ok(Math.abs(viewport.getZoom() - 0.25) < EPSILON,
+                "Rotated tall image fills the viewer width.");
+            Util.assertRectangleEquals(
+                assert,
+                viewport.getBoundsNoRotate(),
+                new OpenSeadragon.Rect(-1.5, 1, 4, 2),
+                EPSILON,
+                "Rotated image remains centered when fitted horizontally.");
+
+            done();
+        };
+        viewer.addHandler('open', openHandler);
+        viewer.open(TALL_PATH);
+    });
+
     QUnit.test('fitVertically', function(assert) {
         const done = assert.async();
         const openHandler = function(event) {
