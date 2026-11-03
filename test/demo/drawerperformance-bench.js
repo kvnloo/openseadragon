@@ -67,6 +67,7 @@
             sources: options.sources,
             seed: options.seed,
             steps: options.steps,
+            conversionBackpressure: !!options.conversionBackpressure,
             frames: samples.length,
             update: summarizeSamples(samples.map(function (sample) { return sample.update; })),
             draw: summarizeSamples(samples.map(function (sample) { return sample.draw; })),

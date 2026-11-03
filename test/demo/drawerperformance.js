@@ -4,6 +4,8 @@
  * Build/serve with "grunt dev", then visit:
  *   /test/demo/drawerperformance.html?bench=1&drawer=webgl&sources=7&seed=17&steps=180
  * Add &fence=1 to synchronize the draw with a 1x1 GPU/canvas readback.
+ * Add &backpressure=1 to enable offscreen cache conversion deferral (default 0).
+ * Compare the same seed/sources/steps/drawer with backpressure=0 and 1.
  * In automation mode no rStats graphs or WebGL prototype statistics are created.
  *
  * Pan/zoom inputs are seeded and applied immediately once per animation frame.
@@ -42,6 +44,7 @@ const drawers = {
 
 let viewer;
 const automationMode = new URL(window.location.href).searchParams.get('bench') === '1';
+const conversionBackpressureEnabled = new URL(window.location.href).searchParams.get('backpressure') === '1';
 if (automationMode) {
     document.documentElement.classList.add('bench-mode');
 }
@@ -1048,6 +1051,15 @@ Stats.Panel = function ( name, fg, bg ) {
             return value;
         };
 
+        // Report actual deferrals separately from started converter paths.
+        const origDeferForRendering = OpenSeadragon.CacheRecord.prototype._deferForRendering;
+        OpenSeadragon.CacheRecord.prototype._deferForRendering = function () {
+            if (activeBench && activeBench.counting) {
+                activeBench.counters.conversionDeferred++;
+            }
+            return origDeferForRendering.apply(this, arguments);
+        };
+
         const origConverterConvert = OpenSeadragon.converter.convert;
         OpenSeadragon.converter.convert = function (tile, data, from, ...to) {
             const state = activeBench && activeBench.counting ? activeBench : null;
@@ -1103,6 +1115,7 @@ Stats.Panel = function ( name, fg, bg ) {
                 tileLoadFailed: 0,
                 sourceFailures: 0,
                 conversionsStarted: 0,
+                conversionDeferred: 0,
                 conversionsCompleted: 0,
                 conversionsFailed: 0,
                 conversionEdges: 0,
@@ -1132,6 +1145,7 @@ Stats.Panel = function ( name, fg, bg ) {
                 sources: num,
                 seed: seed,
                 steps: steps,
+                conversionBackpressure: !!viewer.conversionBackpressure,
                 samples: state.samples,
                 counters: counters,
                 userAgent: navigator.userAgent
@@ -1340,6 +1354,7 @@ function makeViewer(drawerType){
         crossOriginPolicy: 'Anonymous',
         ajaxWithCredentials: false,
         drawer:drawerType,
+        conversionBackpressure: conversionBackpressureEnabled,
         blendTime:0
     });
 
