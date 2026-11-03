@@ -110,6 +110,48 @@
         }
     });
 
+    QUnit.test('Existing global HTML overlay survives sequence navigation', function(assert) {
+        const done = assert.async();
+        const element = $('<div id="sequence-html-overlay"><span>Original overlay content</span></div>')
+            .appendTo('#qunit-fixture').get(0);
+        const originalChild = element.firstChild;
+        let opens = 0;
+
+        viewer = OpenSeadragon({
+            id: 'example-overlays',
+            prefixUrl: '/build/openseadragon/images/',
+            tileSources: ['/test/data/testpattern.dzi', '/test/data/testpattern.dzi'],
+            sequenceMode: true,
+            springStiffness: 100,
+            overlays: [{
+                id: element.id,
+                x: 0.1,
+                y: 0.4,
+                placement: 'TOP_LEFT'
+            }]
+        });
+
+        viewer.addHandler('open', function() {
+            opens++;
+            assert.equal(viewer.currentOverlays.length, 1,
+                'One global overlay on page ' + opens);
+            assert.strictEqual(viewer.currentOverlays[0].element, element,
+                'Original HTML element reused on page ' + opens);
+            assert.strictEqual(viewer.currentOverlays[0].element.firstChild, originalChild,
+                'Original child content kept on page ' + opens);
+            assert.ok(viewer.overlaysContainer.contains(element),
+                'Overlay is attached to viewer on page ' + opens);
+
+            if (opens === 1) {
+                viewer.goToPage(1);
+            } else if (opens === 2) {
+                viewer.goToPage(0);
+            } else {
+                done();
+            }
+        });
+    });
+
     QUnit.test('Page Overlays via viewer options', function(assert) {
         const done = assert.async();
         viewer = OpenSeadragon({
