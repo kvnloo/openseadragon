@@ -1,3 +1,23 @@
+/*
+ * Drawer performance demo and automated harness.
+ *
+ * Build/serve with "grunt dev", then visit:
+ *   /test/demo/drawerperformance.html?bench=1&drawer=webgl&sources=7&seed=17&steps=180
+ * Add &fence=1 to synchronize the draw with a 1x1 GPU/canvas readback.
+ * In automation mode no rStats graphs or WebGL prototype statistics are created.
+ *
+ * Pan/zoom inputs are seeded and applied immediately once per animation frame.
+ * The returned window.__osdBench is a JSON-safe summary, also displayed in
+ * #bench-result; window.__osdBenchSamples holds the individual frame timings.
+ * "frame" is wall-clock work from world.update start through world.draw/fence end,
+ * not the refresh interval. "tileRequests" counts dispatched ImageJob attempts
+ * (including batched jobs and retries), "tileLoaded" counts tile-loaded events,
+ * and "conversions" count real converter paths separately. Counters begin when
+ * sources are added and stop after the last pan/zoom step plus two render frames.
+ * Fence measurements are optional and browser/GPU dependent; compare like
+ * hardware, browser, viewport size and fence settings. No CI threshold is set.
+ */
+
 const sources = {
     "rainbow":"../data/testpattern.dzi",
     "leaves":"../data/iiif_2_0_sizes/info.json",
@@ -21,6 +41,10 @@ const drawers = {
 
 
 let viewer;
+const automationMode = new URL(window.location.href).searchParams.get('bench') === '1';
+if (automationMode) {
+    document.documentElement.classList.add('bench-mode');
+}
 
 ( function () {
 
@@ -862,9 +886,12 @@ Stats.Panel = function ( name, fg, bg ) {
 
     const origUpdate = OpenSeadragon.World.prototype.update;
     const origDraw = OpenSeadragon.World.prototype.draw;
+    let activeBench = null;
 
-    const glS = new glStats();
-    const rS = new rStats( {
+    // The visual overlay must not be constructed in automation mode: even idle
+    // rStats graphs consume enough resources to distort drawer comparisons.
+    const glS = automationMode ? null : new glStats();
+    const rS = automationMode ? null : new rStats({
         values: {
             frame: { caption: 'Total frame time (ms)', over: 16 },
             fps: { caption: 'Framerate (FPS)', below: 30 },
@@ -878,41 +905,330 @@ Stats.Panel = function ( name, fg, bg ) {
         fractions: [
             { base: 'frame', steps: [ 'update', 'draw', 'other' ] }
         ],
-        plugins: [
-            // tS,
-            glS
-        ]
-    } );
+        plugins: [ glS ]
+    });
 
-    OpenSeadragon.World.prototype.update = function(){
-        // statsUpdate.begin();
-        rS( 'frame' ).end();
+    const fencePixel = new Uint8Array(4);
+    function synchronousFence() {
+        const drawer = viewer.drawer;
+        if (drawer.getType() === 'webgl') {
+            // The v6 drawer owns the WebGL context through its context manager.
+            const gl = drawer._glContext && drawer._glContext.getContext();
+            if (!gl || gl.isContextLost()) {
+                throw new Error('WebGL context is unavailable');
+            }
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, fencePixel);
+        } else if (drawer.getType() === 'canvas') {
+            drawer.context.getImageData(0, 0, 1, 1);
+        }
+    }
+
+    OpenSeadragon.World.prototype.update = function () {
+        if (automationMode) {
+            const state = activeBench && activeBench.sampling && viewer &&
+                this === viewer.world ? activeBench : null;
+            if (!state) {
+                return origUpdate.apply(this, arguments);
+            }
+            const start = window.performance.now();
+            try {
+                return origUpdate.apply(this, arguments);
+            } finally {
+                state.lastUpdate = {
+                    start: start,
+                    update: window.performance.now() - start
+                };
+            }
+        }
+
+        rS('frame').end();
         rS('other').end();
-        rS( 'frame' ).start();
+        rS('frame').start();
         glS.start();
-
-        rS( 'rAF' ).tick();
-        rS( 'FPS' ).frame();
+        rS('rAF').tick();
+        rS('FPS').frame();
         rS('update').start();
-        origUpdate.call(this, ...arguments);
-        // statsUpdate.end();
+        const value = origUpdate.apply(this, arguments);
         rS('update').end();
+        return value;
     };
 
-    OpenSeadragon.World.prototype.draw = function(){
-        // statsDraw.begin();
+    OpenSeadragon.World.prototype.draw = function () {
+        if (automationMode) {
+            const state = activeBench && activeBench.sampling && viewer &&
+                this === viewer.world ? activeBench : null;
+            if (!state) {
+                return origDraw.apply(this, arguments);
+            }
+            const drawStart = window.performance.now();
+            try {
+                return origDraw.apply(this, arguments);
+            } finally {
+                if (state.fence) {
+                    try {
+                        synchronousFence();
+                        state.counters.fenceReads++;
+                    } catch (error) {
+                        state.counters.fenceErrors++;
+                    }
+                }
+                const end = window.performance.now();
+                if (state.lastUpdate) {
+                    state.samples.push({
+                        update: state.lastUpdate.update,
+                        draw: end - drawStart,
+                        frame: end - state.lastUpdate.start
+                    });
+                    state.lastUpdate = null;
+                }
+            }
+        }
+
         rS('draw').start();
-        origDraw.call(this, ...arguments);
-        // statsDraw.end();
+        const value = origDraw.apply(this, arguments);
         rS('draw').end();
         rS('other').start();
         rS().update();
+        return value;
+    };
+
+    if (automationMode) {
+        // ImageJob.start dispatches an actual TileSource.downloadTileStart attempt.
+        // BatchImageJob.start calls prepareForBatch instead of each job's start.
+        const origJobStart = OpenSeadragon.ImageJob.prototype.start;
+        OpenSeadragon.ImageJob.prototype.start = function () {
+            if (activeBench && activeBench.counting) {
+                activeBench.counters.tileRequests++;
+            }
+            return origJobStart.apply(this, arguments);
+        };
+        const origBatchPrepare = OpenSeadragon.ImageJob.prototype.prepareForBatch;
+        OpenSeadragon.ImageJob.prototype.prepareForBatch = function () {
+            if (activeBench && activeBench.counting) {
+                activeBench.counters.tileRequests++;
+            }
+            return origBatchPrepare.apply(this, arguments);
+        };
+
+        // CacheRecord._convert executes conversion edges directly, bypassing
+        // converter.convert. getDataAs and TiledImage._onTileLoad use the latter.
+        // The paths therefore measure distinct work without double counting.
+        const origCacheConvert = OpenSeadragon.CacheRecord.prototype._convert;
+        OpenSeadragon.CacheRecord.prototype._convert = function (from, to) {
+            const state = activeBench && activeBench.counting ? activeBench : null;
+            const path = state && OpenSeadragon.converter.getConversionPath(from, to);
+            if (!path || path.length === 0) {
+                return origCacheConvert.apply(this, arguments);
+            }
+
+            const counters = state.counters;
+            counters.conversionsStarted++;
+            counters.conversionEdges += path.length;
+            let value;
+            try {
+                value = origCacheConvert.apply(this, arguments);
+            } catch (error) {
+                counters.conversionsFailed++;
+                throw error;
+            }
+            const pending = this._promise;
+            if (pending && typeof pending.then === 'function') {
+                pending.then(function (data) {
+                    if (data === undefined) {
+                        counters.conversionsFailed++;
+                    } else {
+                        counters.conversionsCompleted++;
+                    }
+                }, function () {
+                    counters.conversionsFailed++;
+                });
+            } else {
+                counters.conversionsFailed++;
+            }
+            return value;
+        };
+
+        const origConverterConvert = OpenSeadragon.converter.convert;
+        OpenSeadragon.converter.convert = function (tile, data, from, ...to) {
+            const state = activeBench && activeBench.counting ? activeBench : null;
+            const path = state && this.getConversionPath(from, to);
+            if (!path || path.length === 0) {
+                return origConverterConvert.apply(this, arguments);
+            }
+
+            const counters = state.counters;
+            counters.conversionsStarted++;
+            counters.conversionEdges += path.length;
+            let promise;
+            try {
+                promise = origConverterConvert.apply(this, arguments);
+            } catch (error) {
+                counters.conversionsFailed++;
+                throw error;
+            }
+            if (promise && typeof promise.then === 'function') {
+                promise.then(function (converted) {
+                    if (converted === undefined) {
+                        counters.conversionsFailed++;
+                    } else {
+                        counters.conversionsCompleted++;
+                    }
+                }, function () {
+                    counters.conversionsFailed++;
+                });
+            } else {
+                counters.conversionsFailed++;
+            }
+            return promise;
+        };
+    }
+
+    function runAutomaticBenchmark(drawerType, num, seed, steps, fence) {
+        if (window.interval) {
+            window.clearInterval(window.interval);
+        }
+        if (viewer) {
+            viewer.destroy();
+        }
+
+        const state = {
+            counting: true,
+            sampling: false,
+            fence: fence,
+            samples: [],
+            lastUpdate: null,
+            counters: {
+                tileRequests: 0,
+                tileLoaded: 0,
+                tileLoadFailed: 0,
+                sourceFailures: 0,
+                conversionsStarted: 0,
+                conversionsCompleted: 0,
+                conversionsFailed: 0,
+                conversionEdges: 0,
+                fenceReads: 0,
+                fenceErrors: 0
+            }
+        };
+        activeBench = state;
+        window.__osdBench = null;
+        window.__osdBenchSamples = [];
+        const report = document.getElementById('bench-result');
+        report.textContent = 'Preparing tile sources...';
+        viewer = window.viewer = makeViewer(drawerType);
+        const actualDrawer = viewer.drawer.getType();
+
+        function finish(error) {
+            if (!state.counting) {
+                return;
+            }
+            state.counting = false;
+            state.sampling = false;
+            const counters = Object.assign({}, state.counters);
+            counters.conversionsPending = Math.max(0,
+                counters.conversionsStarted - counters.conversionsCompleted - counters.conversionsFailed);
+            const result = window.OpenSeadragonDrawerBench.makeSummary({
+                drawer: actualDrawer,
+                sources: num,
+                seed: seed,
+                steps: steps,
+                samples: state.samples,
+                counters: counters,
+                userAgent: navigator.userAgent
+            });
+            if (error) {
+                result.error = error;
+            }
+            window.__osdBenchSamples = state.samples.slice();
+            window.__osdBench = result;
+            report.textContent = JSON.stringify(result, null, 2);
+        }
+
+        if (actualDrawer !== drawerType) {
+            finish('Requested drawer unavailable: ' + drawerType);
+            return;
+        }
+
+        viewer.addHandler('tile-loaded', function () {
+            if (state.counting) {
+                state.counters.tileLoaded++;
+            }
+        });
+        viewer.addHandler('tile-load-failed', function () {
+            if (state.counting) {
+                state.counters.tileLoadFailed++;
+            }
+        });
+
+        let sourcesCompleted = 0;
+        function sourceDone(failed) {
+            if (failed) {
+                state.counters.sourceFailures++;
+            }
+            sourcesCompleted++;
+            if (sourcesCompleted !== num) {
+                return;
+            }
+
+            if (viewer.world.getItemCount() === 0) {
+                finish('No tile sources could be opened');
+                return;
+            }
+            viewer.viewport.goHome(true);
+            const sequence = window.OpenSeadragonDrawerBench.generateSequence(seed, steps);
+            let index = 0;
+
+            function nextFrame() {
+                if (!state.counting) {
+                    return;
+                }
+                if (index === sequence.length) {
+                    // Allow the final viewport change to be painted before snapshotting counters.
+                    window.requestAnimationFrame(function () {
+                        window.requestAnimationFrame(function () {
+                            finish();
+                        });
+                    });
+                    return;
+                }
+
+                state.sampling = true;
+                const action = sequence[index++];
+                const bounds = viewer.viewport.getBounds(true);
+                viewer.viewport.panBy(new OpenSeadragon.Point(
+                    action.dx * bounds.width, action.dy * bounds.height), true);
+                viewer.viewport.zoomBy(action.zoom, undefined, true);
+                viewer.forceRedraw();
+                window.requestAnimationFrame(nextFrame);
+            }
+
+            report.textContent = 'Recording ' + steps + ' viewport steps...';
+            window.requestAnimationFrame(nextFrame);
+        }
+
+        makeTileSources(num).forEach(function (tileSource, i) {
+            viewer.addTiledImage({
+                tileSource: tileSource,
+                x: (i % 10) / 20,
+                y: Math.floor(i / 10) / 20,
+                width: 1,
+                opacity: (i % 3) === 0 ? 0.4 : 1,
+                success: function () {
+                    sourceDone(false);
+                },
+                error: function () {
+                    sourceDone(true);
+                }
+            });
+        });
     }
 
 // })();
 
 function run(drawerType, num, benchmark) {
-    rS('other').start();
+    if (rS) {
+        rS('other').start();
+    }
 
     if(viewer){
         viewer.destroy();
@@ -1076,7 +1392,19 @@ $("#select-drawer").html(Object.entries(drawers).map(([k, v]) => {
     const selected = drawer === k ? "selected" : "";
     return `<option value="${k}" ${selected}>${v}</option>`;
 }).join("\n"));
-if (drawer) {
+if (automationMode) {
+    function benchInt(name, fallback, max) {
+        const value = Number.parseInt(url.searchParams.get(name), 10);
+        return Number.isSafeInteger(value) ? Math.max(1, Math.min(max, value)) : fallback;
+    }
+
+    const seedValue = Number.parseInt(url.searchParams.get('seed'), 10);
+    const seed = Number.isSafeInteger(seedValue) ? seedValue : 1;
+    const selectedDrawer = drawer === 'canvas' ? 'canvas' : 'webgl';
+    runAutomaticBenchmark(selectedDrawer,
+        benchInt('sources', 1, 50), seed, benchInt('steps', 180, 10000),
+        url.searchParams.get('fence') === '1');
+} else if (drawer) {
     run(drawer, numberOfSources);
 }
 

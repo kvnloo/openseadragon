@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="../lib/jquery-ui-1.10.2/css/smoothness/jquery-ui-1.10.2.min.css">
     <!-- <script src="https://cdnjs.cloudflare.com/ajax/libs/stats.js/17/Stats.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script> -->
 
+    <script src="./drawerperformance-bench.js"></script>
     <script type="module" src="./drawerperformance.js"></script>
     <style type="text/css">
         .content{
@@ -22,6 +23,15 @@
             font-family: monospace;
             min-height: 1.2em;
         }
+        #bench-result{
+            white-space:pre-wrap;
+            overflow-wrap:anywhere;
+            font-family:monospace;
+        }
+        .bench-mode #drawer-controls,
+        .bench-mode #load-time-hint{
+            display:none;
+        }
         #load-time-hint{
             margin-bottom: 6px;
             font-size: 0.85em;
@@ -33,7 +43,7 @@
     <div class="content">
 
         <h2>Compare performance of drawer implementations</h2>
-        <div>
+        <div id="drawer-controls">
             <label>Select a drawer: </label>
             <select id="select-drawer">
 
@@ -45,6 +55,7 @@
         </div>
         <div id="load-time"></div>
         <div id="load-time-hint">Load time is measured from the moment all images are in the world and the viewport is at home, with the panning loop switched off. Turn the browser cache off (DevTools &rarr; Network &rarr; Disable cache) or the second measurement will only time the cache.</div>
+        <pre id="bench-result" aria-live="polite"></pre>
         <div id="drawer"></div>
 
 
