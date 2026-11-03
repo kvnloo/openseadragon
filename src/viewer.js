@@ -3322,6 +3322,10 @@ function getOverlayObject( viewer, overlay ) {
         );
     }
 
+    // Keep the element when this overlay is recreated after a sequence page change.
+    // It may no longer be in the document after the previous overlay is destroyed.
+    overlay.element = element;
+
     let location = overlay.location;
     let width = overlay.width;
     let height = overlay.height;
