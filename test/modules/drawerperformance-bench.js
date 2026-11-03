@@ -14,9 +14,10 @@
         assert.strictEqual(bench.percentile([4, 1, 3, 2], 0.5), 2.5, 'even median is interpolated');
         assert.ok(Math.abs(bench.percentile([4, 1, 3, 2], 0.95) - 3.85) < 1e-10,
             'p95 uses linear interpolation at position 2.85');
-        assert.strictEqual(bench.percentile([4, 1, 3, 2], 0), 1, 'minimum');
-        assert.strictEqual(bench.percentile([4, 1, 3, 2], 1), 4, 'maximum');
-        assert.deepEqual([4, 1, 3, 2], [4, 1, 3, 2], 'input is not mutated');
+        const untouched = [4, 1, 3, 2];
+        assert.strictEqual(bench.percentile(untouched, 0), 1, 'minimum');
+        assert.strictEqual(bench.percentile(untouched, 1), 4, 'maximum');
+        assert.deepEqual(untouched, [4, 1, 3, 2], 'input is not mutated');
     });
 
     QUnit.test('statistics have predictable values and nulls', function (assert) {
@@ -67,12 +68,18 @@
         assert.strictEqual(summary.version, 1, 'stable schema version');
         assert.strictEqual(summary.drawer, 'webgl', 'drawer reported');
         assert.strictEqual(summary.frames, 2, 'actual sampled frame count');
-        assert.deepEqual(summary.update, { median: 3, p95: 3.9, max: 4, mean: 3 },
-            'update statistics');
-        assert.deepEqual(summary.draw, { median: 5, p95: 5.9, max: 6, mean: 5 },
-            'draw statistics');
-        assert.deepEqual(summary.frame, { median: 9, p95: 10.8, max: 11, mean: 9 },
-            'frame statistics');
+        assert.strictEqual(summary.update.median, 3, 'update median');
+        assert.strictEqual(summary.update.max, 4, 'update max');
+        assert.strictEqual(summary.update.mean, 3, 'update mean');
+        assert.ok(Math.abs(summary.update.p95 - 3.9) < 1e-10, 'update p95');
+        assert.strictEqual(summary.draw.median, 5, 'draw median');
+        assert.strictEqual(summary.draw.max, 6, 'draw max');
+        assert.strictEqual(summary.draw.mean, 5, 'draw mean');
+        assert.ok(Math.abs(summary.draw.p95 - 5.9) < 1e-10, 'draw p95');
+        assert.strictEqual(summary.frame.median, 9, 'frame median');
+        assert.strictEqual(summary.frame.max, 11, 'frame max');
+        assert.strictEqual(summary.frame.mean, 9, 'frame mean');
+        assert.ok(Math.abs(summary.frame.p95 - 10.8) < 1e-10, 'frame p95');
         assert.deepEqual(summary.counters, {
             tileRequests: 3, tileLoaded: 2, conversionsStarted: 1
         }, 'work counters are kept separate');
