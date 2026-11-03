@@ -100,6 +100,51 @@
         });
     });
 
+    QUnit.test('lower pyramid levels downsample from preceding levels', function(assert) {
+        // A 16x16 source has levels 1, 2, 4, 8 and 16; requesting 4x4
+        // must downsample 16 -> 8 -> 4, not 16 -> 4 in one step.
+        var image = { naturalWidth: 16, naturalHeight: 16, src: 'test.png' };
+        var source = Object.create(OpenSeadragon.ImageTileSource.prototype);
+        var draws = [];
+        var result;
+        var error;
+        var type;
+
+        source.buildPyramid = true;
+        source.image = image;
+        source.minLevel = 0;
+        source.levels = source._buildLevels(image);
+        source.maxLevel = source.levels.length - 1;
+        source._createContext2D = function(data, width, height) {
+            var context = { canvas: { width: width, height: height } };
+            draws.push({ data: data, width: width, height: height, context: context });
+            return context;
+        };
+
+        source.downloadTileStart({
+            postData: { level: source.maxLevel - 2 },
+            finish: function(data, message, dataType) {
+                result = data;
+                error = message;
+                type = dataType;
+            },
+            fail: function(message) {
+                assert.ok(false, message);
+            }
+        });
+
+        assert.strictEqual(source.maxLevel, 4, '16px image produces five levels');
+        assert.deepEqual(draws.map(function(draw) {
+            return [draw.width, draw.height];
+        }), [[8, 8], [4, 4]], 'draws the intermediate 8px level before the 4px level');
+        assert.strictEqual(draws[0] && draws[0].data, image, 'first draw uses the original image');
+        assert.strictEqual(draws[1] && draws[1].data,
+            draws[0] && draws[0].context.canvas, 'second draw uses the first level canvas');
+        assert.strictEqual(result, draws[1] && draws[1].context, 'returns the final level');
+        assert.strictEqual(error, null, 'no error');
+        assert.strictEqual(type, 'context2d', 'returns the correct data type');
+    });
+
     QUnit.test('buildPyramid: false keeps a single level', function(assert) {
         var done = assert.async();
         var source = new OpenSeadragon.ImageTileSource({ url: '/test/data/A.png', buildPyramid: false });

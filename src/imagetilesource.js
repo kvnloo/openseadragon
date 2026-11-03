@@ -197,8 +197,15 @@ $.ImageTileSource = class extends $.TileSource {
         }
 
         if (tileData.level >= this.minLevel && tileData.level <= this.maxLevel) {
-            const levelData = this.levels[tileData.level];
-            const context = this._createContext2D(this.image, levelData.width, levelData.height);
+            // Downsample through each intermediate level, instead of shrinking
+            // the original image directly to the requested resolution.
+            let data = this.image;
+            let context;
+            for (let level = this.maxLevel - 1; level >= tileData.level; level--) {
+                const levelData = this.levels[level];
+                context = this._createContext2D(data, levelData.width, levelData.height);
+                data = context.canvas;
+            }
             job.finish(context, null, "context2d");
             return;
         }
