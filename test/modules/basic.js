@@ -326,6 +326,48 @@
     });
 
 
+    QUnit.test('Destroy restores the host element position', function(assert) {
+        const cases = [
+            { original: 'static', changed: null, expected: 'static' },
+            { original: '', changed: null, expected: '' },
+            { original: 'relative', changed: null, expected: 'relative' },
+            { original: 'static', changed: 'absolute', expected: 'absolute' }
+        ];
+
+        cases.forEach(function(testCase, index) {
+            const host = document.createElement('div');
+            host.id = 'position-host-' + index;
+            host.style.position = testCase.original;
+            host.style.width = '300px';
+            host.style.height = '200px';
+            const sibling = document.createElement('span');
+            host.appendChild(sibling);
+            document.getElementById('qunit-fixture').appendChild(host);
+
+            const instance = OpenSeadragon({
+                element: host,
+                id: host.id,
+                showNavigationControl: false
+            });
+            assert.strictEqual(host.style.position, 'relative',
+                'Viewer uses a positioned host (' + index + ')');
+            assert.strictEqual(host.children.length, 2,
+                'Viewer adds only its own container (' + index + ')');
+
+            if (testCase.changed !== null) {
+                host.style.position = testCase.changed;
+            }
+            instance.destroy();
+
+            assert.strictEqual(host.style.position, testCase.expected,
+                'Destroy preserves the correct host position (' + index + ')');
+            assert.strictEqual(host.children.length, 1,
+                'Destroy removes only its own container (' + index + ')');
+            assert.strictEqual(host.firstChild, sibling,
+                'Destroy keeps existing host content (' + index + ')');
+        });
+    });
+
     // The Wikipedia logo has CORS enabled
     const corsImg = 'https://upload.wikimedia.org/wikipedia/en/b/bc/Wiki.png';
 
