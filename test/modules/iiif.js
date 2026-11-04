@@ -296,6 +296,50 @@
         assert.equal(source3DescendingSizeOrder.getTileUrl(2, 0, 0), "http://example.com/identifier/0,0,512,512/512,512/0/default.jpg");
     });
 
+    QUnit.test('IIIFTileSource avoids zero-height full image requests', function( assert ) {
+        const tiles = [{ width: 512, scaleFactors: [1, 2, 4, 8, 16, 32, 64, 128, 256] }];
+        const wide = getSource({
+            "@context": "http://iiif.io/api/image/2/context.json",
+            "@id": id,
+            width: 272,
+            height: 87,
+            tiles: tiles,
+            profile: ["http://iiif.io/api/image/2/level1.json"]
+        });
+
+        assert.equal(wide.maxLevel, 8, 'Scale factor 256 selects level 0 as 1/256 resolution');
+        assert.equal(wide.getTileUrl(0, 0, 0), id + '/full/4,/0/default.jpg',
+            'Smallest level requests at least one pixel of height after rounding down');
+        assert.equal(wide.getTileUrl(1, 0, 0), id + '/full/4,/0/default.jpg',
+            'Next level also avoids a zero-height response');
+        assert.equal(wide.getTileUrl(2, 0, 0), id + '/full/5,/0/default.jpg',
+            'Levels with sufficient width retain their normal requests');
+        assert.equal(wide.getTileUrl(8, 0, 0), id + '/full/full/0/default.jpg',
+            'The full-resolution image still uses the canonical full size');
+
+        const tall = getSource({
+            "@context": "http://iiif.io/api/image/2/context.json",
+            "@id": id,
+            width: 87,
+            height: 272,
+            tiles: tiles,
+            profile: ["http://iiif.io/api/image/2/level1.json"]
+        });
+        assert.equal(tall.getTileUrl(0, 0, 0), id + '/full/1,/0/default.jpg',
+            'Portrait images do not need the minimum-width adjustment');
+
+        const version3 = getSource({
+            "@context": "http://iiif.io/api/image/3/context.json",
+            id: id,
+            width: 272,
+            height: 87,
+            tiles: tiles,
+            profile: "level1"
+        });
+        assert.equal(version3.getTileUrl(0, 0, 0), id + '/full/2,1/0/default.jpg',
+            'Version 3 keeps its explicit nonzero width and height');
+    });
+
     QUnit.test('IIIFTileSource ignores an empty sizes array', function( assert ) {
         const source = getSource(infoJson2level1EmptySizes);
         const reference = getSource(infoJson2level1);
