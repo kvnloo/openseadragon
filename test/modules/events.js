@@ -1530,4 +1530,49 @@
         viewer.open( '/test/data/testpattern.dzi' );
     } );
 
+
+    QUnit.test( 'Viewer: canvas click acquires focus without scrolling', function (assert) {
+        const done = assert.async();
+        const scroller = $('<div></div>')
+            .css({ width: '300px', height: '100px', overflow: 'auto' })
+            .appendTo('#qunit-fixture')[0];
+        $('<div></div>').css({ height: '300px' }).appendTo(scroller);
+        $(viewer.element)
+            .css({ width: '300px', height: '200px' })
+            .appendTo(scroller);
+
+        viewer.addOnceHandler('open', function () {
+            const originalFocus = viewer.canvas.focus;
+            let focusOptions;
+
+            viewer.canvas.focus = function (options) {
+                focusOptions = options;
+                return originalFocus.call(this, options);
+            };
+
+            viewer.canvas.blur();
+            scroller.scrollTop = 0;
+            assert.notStrictEqual(document.activeElement, viewer.canvas,
+                'Canvas starts without keyboard focus');
+
+            viewer.innerTracker.clickHandler({
+                eventSource: viewer.innerTracker,
+                position: new OpenSeadragon.Point(10, 10),
+                quick: false,
+                pointerType: 'mouse'
+            });
+
+            assert.deepEqual(focusOptions, { preventScroll: true },
+                'Canvas focus suppresses automatic page scrolling');
+            assert.strictEqual(scroller.scrollTop, 0,
+                'The surrounding scroll container does not jump to the canvas');
+            assert.strictEqual(document.activeElement, viewer.canvas,
+                'The canvas still receives focus for keyboard navigation');
+
+            viewer.canvas.focus = originalFocus;
+            done();
+        });
+        viewer.open('/test/data/testpattern.dzi');
+    });
+
 } )();
