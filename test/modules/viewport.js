@@ -794,6 +794,61 @@
         viewer.open(TALL_PATH);
     });
 
+    // tall.dzi (500 x 2000) occupies a 1 x 4 content rectangle.
+    function assertRotatedFitMatrix(assert, fitMethod) {
+        const done = assert.async();
+        const cases = [
+            {rotation: 0, width: 1, height: 4},
+            {rotation: 90, width: 4, height: 1},
+            {rotation: 180, width: 1, height: 4},
+            {rotation: 270, width: 4, height: 1},
+            {rotation: 30, width: 2 + Math.sqrt(3) / 2, height: 0.5 + 2 * Math.sqrt(3)}
+        ];
+        const sizes = [
+            new OpenSeadragon.Point(800, 400),
+            new OpenSeadragon.Point(400, 800)
+        ];
+
+        viewer.addOnceHandler('open', function() {
+            const viewport = viewer.viewport;
+            cases.forEach(function(testCase) {
+                sizes.forEach(function(size) {
+                    const aspect = size.x / size.y;
+                    viewport.resize(size, true);
+                    viewport.setRotation(testCase.rotation, true);
+                    viewport[fitMethod](true);
+
+                    const expectedWidth = fitMethod === 'fitHorizontally' ?
+                        testCase.width : testCase.height * aspect;
+                    const expectedHeight = fitMethod === 'fitHorizontally' ?
+                        testCase.width / aspect : testCase.height;
+                    const expectedBounds = new OpenSeadragon.Rect(
+                        0.5 - expectedWidth / 2,
+                        2 - expectedHeight / 2,
+                        expectedWidth,
+                        expectedHeight);
+                    const label = fitMethod + ' at ' + testCase.rotation +
+                        ' degrees, viewer aspect ' + aspect;
+
+                    Util.assertRectangleEquals(assert, viewport.getBoundsNoRotate(),
+                        expectedBounds, EPSILON, label + ' visible bounds');
+                    assert.ok(Math.abs(viewport.getZoom() - 1 / expectedWidth) < EPSILON,
+                        label + ' zoom matches visible width');
+                });
+            });
+            done();
+        });
+        viewer.open(TALL_PATH);
+    }
+
+    QUnit.test('fitHorizontally rotation/aspect matrix', function(assert) {
+        assertRotatedFitMatrix(assert, 'fitHorizontally');
+    });
+
+    QUnit.test('fitVertically rotation/aspect matrix', function(assert) {
+        assertRotatedFitMatrix(assert, 'fitVertically');
+    });
+
     QUnit.test('fitVertically', function(assert) {
         const done = assert.async();
         const openHandler = function(event) {
