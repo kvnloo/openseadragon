@@ -8,6 +8,31 @@
     });
 
 
+    QUnit.test('TMS tile URL level offset (#1513)', function(assert) {
+        const regular = new OpenSeadragon.TmsTileSource({
+            width: 1024,
+            height: 1024,
+            tilesUrl: '/tiles/'
+        });
+        const offset = new OpenSeadragon.TmsTileSource({
+            width: 1024,
+            height: 1024,
+            tilesUrl: '/tiles/',
+            levelOffset: 1
+        });
+
+        assert.equal(regular.maxLevel, 1, 'Internal TMS maxLevel for four tiles per axis');
+        assert.equal(offset.maxLevel, regular.maxLevel, 'Offset does not change the pyramid');
+        assert.equal(regular.getTileUrl(1, 2, 0), '/tiles/1/2/3.png',
+            'Default TMS URLs retain the original level and flipped Y coordinate');
+        assert.equal(offset.getTileUrl(1, 2, 0), '/tiles/2/2/3.png',
+            'Offset applies to the server zoom level without changing tile coordinates');
+        assert.equal(regular.getTileUrl(0, 1, 1), '/tiles/0/1/0.png',
+            'Default lower-level TMS URL remains unchanged');
+        assert.equal(offset.getTileUrl(0, 1, 1), '/tiles/1/1/0.png',
+            'Offset also applies to lower-level TMS URLs');
+    });
+
     QUnit.test("should set sane tile size defaults", function(assert) {
         const source = new OpenSeadragon.TileSource();
 
