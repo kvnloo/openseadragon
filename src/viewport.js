@@ -771,11 +771,13 @@ $.Viewport.prototype = {
      * @returns {OpenSeadragon.Viewport} Chainable.
      */
     fitVertically: function(immediately) {
+        // Rotate a nonzero-width line to avoid Rect.rotate's zero-width case.
+        const center = this._contentBounds.getCenter();
         const box = new $.Rect(
-            this._contentBounds.x + (this._contentBounds.width / 2),
-            this._contentBounds.y,
-            0,
-            this._contentBounds.height);
+            center.x - (this._contentBounds.height / 2),
+            center.y,
+            this._contentBounds.height,
+            0).rotate(90 - this.getRotation());
         return this.fitBounds(box, immediately);
     },
 
@@ -789,7 +791,7 @@ $.Viewport.prototype = {
             this._contentBounds.x,
             this._contentBounds.y + (this._contentBounds.height / 2),
             this._contentBounds.width,
-            0);
+            0).rotate(-this.getRotation());
         return this.fitBounds(box, immediately);
     },
 
