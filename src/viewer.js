@@ -3683,9 +3683,9 @@ function onCanvasClick( event ) {
 
     const haveKeyboardFocus = document.activeElement === this.canvas;
 
-    // If we don't have keyboard focus, request it.
+    // If we don't have keyboard focus, request it without scrolling the page.
     if ( !haveKeyboardFocus ) {
-        this.canvas.focus();
+        this.canvas.focus({ preventScroll: true });
     }
     if(this.viewport.flipped){
         event.position.x = this.viewport.getContainerSize().x - event.position.x;
