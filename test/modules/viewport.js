@@ -1193,6 +1193,54 @@
         });
     });
 
+    QUnit.test('flipped viewport converts viewer pixels and image coordinates', function(assert) {
+        const done = assert.async();
+        viewer.addOnceHandler('open', function() {
+            const viewport = viewer.viewport;
+            const Point = OpenSeadragon.Point;
+            viewport.zoomTo(2, null, true);
+            viewport.panTo(new Point(0.6, 0.45), true);
+
+            const center = viewport.getCenter(true);
+            const size = viewport.getContainerSize();
+            const leftPixel = new Point(size.x / 4, size.y / 2);
+            const rightPixel = new Point(3 * size.x / 4, size.y / 2);
+            const logicalLeft = new Point(center.x - 1 / 8, center.y);
+            const logicalRight = new Point(center.x + 1 / 8, center.y);
+
+            assertPointsEquals(assert, viewport.pointFromPixel(leftPixel, true),
+                logicalLeft, EPSILON, 'Unflipped quarter-width pixel maps to the left');
+            viewport.setFlip(true);
+            assertPointsEquals(assert, viewport.pointFromPixel(leftPixel, true),
+                logicalRight, EPSILON, 'Flipped left pixel maps to the right');
+            assertPointsEquals(assert, viewport.pointFromPixel(rightPixel, true),
+                logicalLeft, EPSILON, 'Flipped right pixel maps to the left');
+            assertPointsEquals(assert, viewport.pixelFromPoint(logicalRight, true),
+                leftPixel, EPSILON, 'Flipped viewport point maps to the left pixel');
+            assertPointsEquals(assert, viewport.pixelFromPoint(logicalLeft, true),
+                rightPixel, EPSILON, 'Flipped viewport point maps to the right pixel');
+
+            const imagePoint = viewport.viewportToImageCoordinates(logicalRight);
+            assertPointsEquals(assert, viewport.viewerElementToImageCoordinates(leftPixel),
+                imagePoint, EPSILON, 'Flipped viewer pixel maps to the matching image point');
+            assertPointsEquals(assert, viewport.imageToViewerElementCoordinates(imagePoint),
+                leftPixel, EPSILON, 'Image point maps back to the flipped viewer pixel');
+
+            viewport.setRotation(90, true);
+            const rotatedPoint = new Point(center.x, center.y - 1 / 8);
+            assertPointsEquals(assert, viewport.pointFromPixel(leftPixel, true),
+                rotatedPoint, EPSILON, 'Flipping and rotation are both applied to viewer pixels');
+            assertPointsEquals(assert, viewport.pixelFromPoint(rotatedPoint, true),
+                leftPixel, EPSILON, 'Rotated and flipped viewport point maps back to viewer pixels');
+            viewport.setFlip(false);
+            assertPointsEquals(assert, viewport.pointFromPixel(leftPixel, true),
+                new Point(center.x, center.y + 1 / 8), EPSILON,
+                'Unflipping restores the rotated coordinates');
+            done();
+        });
+        viewer.open(DZI_PATH);
+    });
+
     QUnit.test('viewportToImageCoordinates', function(assert) {
         loopingTestHelper(assert, {
             testArray: testPoints,
