@@ -200,6 +200,27 @@
         assert.deepEqual(events, ['focus'], 'only focus raised');
     });
 
+    QUnit.test('custom button can preserve its display and position styles (#1567)', function (assert) {
+        const element = document.createElement('button');
+        element.style.display = 'flex';
+        element.style.position = 'absolute';
+        makeButton({ element: element, preserveElementStyle: true });
+
+        assert.equal(element.style.display, 'flex', 'custom display remains unchanged');
+        assert.equal(element.style.position, 'absolute', 'custom position remains unchanged');
+        assert.equal(button.element, element, 'original custom element is used');
+    });
+
+    QUnit.test('custom button retains legacy styling by default (#1567)', function (assert) {
+        const element = document.createElement('button');
+        element.style.display = 'flex';
+        element.style.position = 'absolute';
+        makeButton({ element: element });
+
+        assert.equal(element.style.display, 'inline-block', 'default display is backward compatible');
+        assert.equal(element.style.position, 'relative', 'default position is backward compatible');
+    });
+
     QUnit.test('page-supplied element is left as it is', function (assert) {
         const element = document.createElement('div');
         makeButton({ element: element });
