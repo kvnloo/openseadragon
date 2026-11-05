@@ -310,6 +310,11 @@ $.Viewer = function( options ) {
         this.tileSources = [ this.xmlPath ];
     }
 
+    // A single source is one sequence page, not a list of URL characters.
+    if (this.sequenceMode && typeof this.tileSources === 'string') {
+        this.tileSources = [ this.tileSources ];
+    }
+
     this.element              = this.element || document.getElementById( this.id );
     this.canvas               = $.makeNeutralElement( "div" );
     this.canvas.className = "openseadragon-canvas";
