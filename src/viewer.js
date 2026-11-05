@@ -4519,6 +4519,12 @@ function updateOnce( viewer ) {
         return;
     }
 
+    // A hidden viewer has no size; defer resizing and drawing until it is visible.
+    // updateMulti will keep checking for a nonzero size on subsequent frames.
+    if (!viewer.container.clientWidth || !viewer.container.clientHeight) {
+        return;
+    }
+
     let viewerWasResized = false;
     if (viewer.autoResize || THIS[viewer.hash].forceResize) {
         let containerSize;
