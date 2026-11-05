@@ -120,6 +120,40 @@
         assertTileAtPoint(0, new OpenSeadragon.Point(1, 3033 / 2000), new OpenSeadragon.Point(0, 0));
     });
 
+    QUnit.test('Zoomify: odd dimensions preserve pyramid tiles (#1169)', function(assert) {
+        const source = new OpenSeadragon.ZoomifyTileSource({
+            width: 513,
+            height: 257,
+            tileSize: 256,
+            tilesUrl: '/zoomify/'
+        });
+
+        // libvips dzsave Zoomify: ceil-half until both dimensions fit one tile.
+        // 513x257 -> 257x129 -> 129x65, then stop (tile size 256).
+        // Tile counts from smallest to largest: 1, 2, 3*2 = 6.
+        // Absolute tile indices: level 0 = 0; level 1 = 1..2;
+        // level 2 = 3..8. All are in TileGroup floor(index / 256) = 0.
+        assert.equal(source.maxLevel, 2, 'the 129 by 65 level fits one tile');
+        assert.deepEqual(source.imageSizes, [
+            { x: 129, y: 65 },
+            { x: 257, y: 129 },
+            { x: 513, y: 257 }
+        ], 'odd dimensions round up until both fit one tile');
+        assert.deepEqual(source.gridSize, [
+            { x: 1, y: 1 },
+            { x: 2, y: 1 },
+            { x: 3, y: 2 }
+        ], 'tile grids match the ceil-rounded libvips pyramid');
+        assert.equal(source._calculateAbsoluteTileNumber(2, 2, 1), 8,
+            'six full-resolution tiles follow three smaller-level tiles');
+        assert.equal(source.getTileUrl(1, 1, 0),
+            '/zoomify/TileGroup0/1-1-0.jpg',
+            'intermediate second tile has absolute index 2');
+        assert.equal(source.getTileUrl(2, 2, 1),
+            '/zoomify/TileGroup0/2-2-1.jpg',
+            'last full-resolution tile has absolute index 8');
+    });
+
     QUnit.test('changing maxLevel', function(assert) {
         const tileSource = new OpenSeadragon.TileSource({
             width: 4096,
