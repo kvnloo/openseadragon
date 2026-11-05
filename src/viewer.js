@@ -1464,6 +1464,10 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
      * @fires OpenSeadragon.Viewer.event:full-page
      */
     setFullPage: function( fullPage ) {
+        if ( !THIS[ this.hash ] ) {
+            // A full-screen exit may finish after this viewer has been destroyed.
+            return this;
+        }
 
         const body = document.body;
         const bodyStyle = body.style;
