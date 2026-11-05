@@ -1303,7 +1303,8 @@ $.Viewport.prototype = {
      * @returns {OpenSeadragon.Point}
      */
     pixelFromPoint: function(point, current) {
-        return this._pixelFromPoint(point, this.getBoundsNoRotate(current));
+        const pixel = this._pixelFromPoint(point, this.getBoundsNoRotate(current));
+        return this.flipped ? new $.Point(this.containerSize.x - pixel.x, pixel.y) : pixel;
     },
 
     // private
@@ -1352,6 +1353,9 @@ $.Viewport.prototype = {
      * @returns {OpenSeadragon.Point}
      */
     pointFromPixel: function(pixel, current) {
+        if (this.flipped) {
+            pixel = new $.Point(this.containerSize.x - pixel.x, pixel.y);
+        }
         return this.pointFromPixelNoRotate(pixel, current).rotate(
             -this.getRotation(current),
             this.getCenter(current)
