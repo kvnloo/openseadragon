@@ -120,6 +120,28 @@
         assertTileAtPoint(0, new OpenSeadragon.Point(1, 3033 / 2000), new OpenSeadragon.Point(0, 0));
     });
 
+    QUnit.test('Zoomify: odd dimensions preserve pyramid tiles (#1169)', function(assert) {
+        const source = new OpenSeadragon.ZoomifyTileSource({
+            width: 513,
+            height: 257,
+            tileSize: 256,
+            tilesUrl: '/zoomify/'
+        });
+
+        assert.equal(source.maxLevel, 3, 'ceil halving retains the 129 by 65 level');
+        assert.deepEqual(source.imageSizes, [
+            { x: 65, y: 33 },
+            { x: 129, y: 65 },
+            { x: 257, y: 129 },
+            { x: 513, y: 257 }
+        ], 'each reduced dimension rounds up');
+        assert.deepEqual(source.gridSize[2], { x: 2, y: 1 },
+            'the 257-pixel intermediate width requires two tiles');
+        assert.equal(source.getTileUrl(2, 1, 0),
+            '/zoomify/TileGroup0/2-1-0.jpg',
+            'the second intermediate tile has the correct level and group');
+    });
+
     QUnit.test('changing maxLevel', function(assert) {
         const tileSource = new OpenSeadragon.TileSource({
             width: 4096,
