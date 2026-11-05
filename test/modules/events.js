@@ -26,6 +26,58 @@
     } );
 
     // ----------
+    QUnit.test( 'MouseTracker: chorded non-primary button release (#1765)', function ( assert ) {
+        const element = $( '<div></div>' ).appendTo( '#qunit-fixture' )[ 0 ];
+        const buttonEvents = [];
+        const tracker = new OpenSeadragon.MouseTracker( {
+            element: element,
+            nonPrimaryPressHandler: function ( event ) {
+                buttonEvents.push( { type: 'press', button: event.button, buttons: event.buttons } );
+            },
+            nonPrimaryReleaseHandler: function ( event ) {
+                buttonEvents.push( { type: 'release', button: event.button, buttons: event.buttons } );
+            }
+        } );
+
+        const dispatch = function ( type, button, buttons ) {
+            element.dispatchEvent( new PointerEvent( type, {
+                bubbles: true,
+                cancelable: true,
+                pointerId: 1,
+                pointerType: 'mouse',
+                isPrimary: true,
+                clientX: 10,
+                clientY: 10,
+                button: button,
+                buttons: buttons
+            } ) );
+        };
+
+        // Right down, left down, right up, then repeat while left remains down.
+        // Pointer Events only dispatch pointermove for the chorded transitions.
+        dispatch( 'pointerenter', -1, 0 );
+        dispatch( 'pointerdown', 2, 2 );
+        dispatch( 'pointermove', -1, 3 );
+        dispatch( 'pointermove', -1, 1 );
+        dispatch( 'pointermove', -1, 1 ); // Unchanged buttons must not cause duplicates.
+        dispatch( 'pointermove', -1, 3 );
+        dispatch( 'pointermove', -1, 1 );
+
+        assert.deepEqual( buttonEvents, [
+            { type: 'press', button: 2, buttons: 2 },
+            { type: 'release', button: 2, buttons: 1 },
+            { type: 'press', button: 2, buttons: 3 },
+            { type: 'release', button: 2, buttons: 1 }
+        ], 'each right-button transition is reported exactly once' );
+        assert.strictEqual( tracker.getActivePointersListByType( 'mouse' ).buttons, 1,
+            'the left button remains pressed after right release' );
+
+        dispatch( 'pointerleave', -1, 1 );
+        assert.strictEqual( tracker.getActivePointerCount(), 0, 'pointer is cleaned up on leave' );
+        tracker.destroy();
+    } );
+
+    // ----------
     QUnit.test( 'MouseTracker: DOM event propagation', function (assert) {
         const done = assert.async();
         const $canvas = $( viewer.element ).find( '.openseadragon-canvas' ).not( '.navigator .openseadragon-canvas' );

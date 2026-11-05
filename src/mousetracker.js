@@ -3630,6 +3630,7 @@
     function updatePointerMove( tracker, eventInfo, gPoint ) {
         const delegate = THIS[ tracker.hash ];
         const pointsList = tracker.getActivePointersListByType( gPoint.type );
+        const previousButtons = pointsList.buttons;
         let delta;
 
         if ( typeof eventInfo.originalEvent.buttons !== 'undefined' ) {
@@ -3647,6 +3648,24 @@
         } else {
             // Should never get here, but due to user agent bugs (e.g. legacy touch) it sometimes happens
             return;
+        }
+
+        // Chorded button changes use pointermove rather than pointerdown/pointerup.
+        if ( $.MouseTracker.havePointerEvents && ( gPoint.type === 'mouse' || gPoint.type === 'pen' ) ) {
+            const changedButtons = ( previousButtons ^ pointsList.buttons ) & ~1;
+            if ( changedButtons ) {
+                const buttonMasks = [ 0, 4, 2, 8, 16, 32 ];
+                for ( let button = 1; button < buttonMasks.length; button++ ) {
+                    const mask = buttonMasks[ button ];
+                    if ( changedButtons & mask ) {
+                        if ( pointsList.buttons & mask ) {
+                            updatePointerDown( tracker, eventInfo, gPoint, button );
+                        } else {
+                            updatePointerUp( tracker, eventInfo, gPoint, button );
+                        }
+                    }
+                }
+            }
         }
 
         eventInfo.shouldCapture = false;
