@@ -331,4 +331,123 @@
         }
     });
 
+
+    // Contracts for dgesteves's #3010, continuing ChiliJohnson's #2242.
+    // ----------
+    QUnit.test('A throwing queued error callback does not strand the next request', function(assert) {
+        OpenSeadragon.setAjaxLoaderLimit(1);
+
+        const first = request();
+        let errorCount = 0;
+        OpenSeadragon.makeAjaxRequest({
+            url: 'throws-on-open',
+            success: function() {
+                assert.ok(false, 'A request that fails to open must not succeed');
+            },
+            error: function() {
+                errorCount++;
+                throw new Error('intentional queued failure');
+            }
+        });
+        const last = request();
+        assert.deepEqual(sendCounts([first, last]), [1, 0],
+            'The first request occupies the slot; the last is queued');
+
+        try {
+            first.xhr.respond(200);
+        } catch (error) {
+            // Propagation policy is separate from independent queue progress.
+            assert.strictEqual(error.message, 'intentional queued failure',
+                'A propagated exception retains its original message');
+        }
+
+        assert.strictEqual(errorCount, 1, 'The failed request reports one error');
+        assert.strictEqual(first.successCount, 1,
+            'The completed request still receives its success callback');
+        assert.strictEqual(last.xhr.sendCount, 1,
+            'The last request starts without manually draining the queue');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.requestFuncs.length, 0,
+            'No request remains stranded in the queue');
+
+        if (last.xhr.sendCount === 1) {
+            last.xhr.respond(200);
+        }
+        assert.strictEqual(last.successCount, 1, 'The last request completes once');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.numActiveRequests, 0,
+            'The queue releases its final active slot');
+    });
+
+    // ----------
+    QUnit.test('A queued AJAX ImageJob starts its timeout only when sent', function(assert) {
+        const originalSetTimeout = window.setTimeout;
+        const originalClearTimeout = window.clearTimeout;
+        const timeoutMs = 1379;
+        const fakeTimerId = 991337;
+        const scheduledTimeouts = [];
+        let successes = 0;
+        let failures = 0;
+
+        window.setTimeout = function(callback, delay) {
+            if (delay === timeoutMs) {
+                scheduledTimeouts.push(callback);
+                return fakeTimerId;
+            }
+            return originalSetTimeout.apply(window, arguments);
+        };
+        window.clearTimeout = function(id) {
+            if (id !== fakeTimerId) {
+                return originalClearTimeout.call(window, id);
+            }
+        };
+
+        try {
+            OpenSeadragon.setAjaxLoaderLimit(1);
+            const blocker = request();
+            const job = new OpenSeadragon.ImageJob({
+                src: 'fake-tile',
+                timeout: timeoutMs,
+                source: {
+                    downloadTileStart: function(context) {
+                        context.xhr = OpenSeadragon.makeAjaxRequest({
+                            url: context.src,
+                            success: function(xhr) {
+                                context.finish({ pixel: 1 }, xhr, 'context2d');
+                            },
+                            error: function(xhr) {
+                                context.fail('XHR failed', xhr);
+                            }
+                        });
+                    },
+                    downloadTileAbort: function(context) {
+                        context.xhr.abort();
+                    }
+                },
+                callback: function(completedJob) {
+                    if (completedJob.errorMsg) {
+                        failures++;
+                    } else {
+                        successes++;
+                    }
+                }
+            });
+
+            job.start();
+            assert.strictEqual(job.xhr.sendCount, 0, 'The tile waits in the AJAX queue');
+            assert.strictEqual(scheduledTimeouts.length, 0,
+                'Queue wait does not consume the tile download timeout');
+
+            blocker.xhr.respond(200);
+            assert.strictEqual(job.xhr.sendCount, 1, 'The tile sends after a slot opens');
+            assert.strictEqual(scheduledTimeouts.length, 1,
+                'The timeout begins at dispatch rather than at queue admission');
+
+            job.xhr.respond(200);
+            assert.strictEqual(successes, 1, 'The tile finishes successfully once');
+            assert.strictEqual(failures, 0, 'Queue wait does not fail the tile');
+        } finally {
+            window.setTimeout = originalSetTimeout;
+            window.clearTimeout = originalClearTimeout;
+        }
+    });
+
 })();
