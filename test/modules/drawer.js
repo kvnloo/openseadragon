@@ -1030,4 +1030,145 @@
         assert.ok(warnings.some(msg => msg.indexOf('falling back to batched rendering') >= 0), 'logs a fallback warning');
     });
 
+
+    QUnit.module('WebGLDrawer instanced batch parity');
+
+    function makeInstancedParityHarness(maxTextures) {
+        const gl = createFakeGl();
+        const proto = OpenSeadragon.WebGLDrawer.prototype;
+        const firstPass = {
+            shaderProgram: 'batched',
+            bufferTexturePosition: 'uv',
+            bufferOutputPosition: 'xy',
+            bufferIndex: 'index',
+            aOutputPosition: 'out',
+            aTexturePosition: 'uvAttr',
+            aIndex: 'indexAttr',
+            uTransformMatrices: Array.from({length: maxTextures}, (_, i) => 'm' + i),
+            uOpacities: 'opacities'
+        };
+        const instancedPass = {
+            shaderProgram: 'instanced',
+            uImages: 'images',
+            bufferTexturePositionTL: 'tl',
+            bufferTexturePositionSize: 'size',
+            bufferTransformMatrix: 'matrix',
+            bufferOpacity: 'alpha',
+            bufferTextureIndex: 'textureIndex',
+            bufferOutputPosition: 'out',
+            aTexturePositionTL: 'tlAttr',
+            aTexturePositionSize: 'sizeAttr',
+            aTransformCol0: 'c0',
+            aTransformCol1: 'c1',
+            aTransformCol2: 'c2',
+            aOpacity: 'alphaAttr',
+            aTextureIndex: 'texAttr',
+            aOutputPosition: 'outAttr'
+        };
+        const drawer = {
+            _glContext: createFakeGlContext(gl, {maxTextures, firstPass}),
+            _firstPassInstanced: instancedPass,
+            _textureUnitIndices: null,
+            _instancedArrays: null,
+            _instancedArrayCapacity: 0,
+            getDataToDraw(tile) {
+                return tile.skip ? null : {texture: tile.texture};
+            },
+            _allocateBatchBuffers: proto._allocateBatchBuffers,
+            _bindTileTextures: proto._bindTileTextures,
+            _getTextureUnitIndices: proto._getTextureUnitIndices,
+            _ensureInstancedArrays: proto._ensureInstancedArrays,
+            _resetInstancedAttributeDivisors: proto._resetInstancedAttributeDivisors,
+            _getTileData(tile, image, info, matrix, index, coordinates,
+                textures, matrices, opacities) {
+                coordinates.fill(0, index * 12, index * 12 + 12);
+                textures[index] = info.texture;
+                matrices[index] = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+                opacities[index] = 1;
+            },
+            _getTileDataInstanced(tile, image, info, matrix, index,
+                positionTL, size, matrices, opacities, textureIndices, textures) {
+                positionTL.set([0, 0], index * 2);
+                size.set([1, 1], index * 2);
+                matrices.set([1, 0, 0, 0, 1, 0, 0, 0, 1], index * 9);
+                opacities[index] = 1;
+                textureIndices[index] = index;
+                textures[index] = info.texture;
+            }
+        };
+        return {gl, drawer};
+    }
+
+    QUnit.test('batched and instanced paths keep identical texture-group draw counts', function(assert) {
+        const proto = OpenSeadragon.WebGLDrawer.prototype;
+        [
+            {tiles: 1, batched: [6], instanced: [[6, 1]]},
+            {tiles: 4, batched: [24], instanced: [[6, 4]]},
+            {tiles: 5, batched: [24, 6], instanced: [[6, 4], [6, 1]]}
+        ].forEach(sample => {
+            const tiles = Array.from({length: sample.tiles},
+                (_, i) => ({tile: {texture: 't' + i}}));
+            const batched = makeInstancedParityHarness(4);
+            const instanced = makeInstancedParityHarness(4);
+
+            proto._drawTilesBatched.call(batched.drawer, tiles, null, null, 4);
+            proto._drawTilesInstanced.call(instanced.drawer, tiles, null, null, 4);
+
+            assert.deepEqual(batched.gl.drawArraysCalls.map(call => call.count),
+                sample.batched, 'WebGL1 vertex counts for ' + sample.tiles + ' tiles');
+            assert.deepEqual(instanced.gl.drawArraysInstancedCalls.map(
+                call => [call.count, call.instances]),
+            sample.instanced, 'WebGL2 vertices and instances for ' + sample.tiles + ' tiles');
+            assert.strictEqual(batched.gl.drawArraysCalls.length,
+                instanced.gl.drawArraysInstancedCalls.length,
+                'both paths make the same number of calls for ' + sample.tiles + ' tiles');
+            assert.deepEqual(batched.gl.boundTextures.map(call => call.texture),
+                instanced.gl.boundTextures.map(call => call.texture),
+                'both paths bind the same tiles in the same order');
+        });
+    });
+
+    QUnit.test('sparse tiles compact across batches without stale uploads', function(assert) {
+        const proto = OpenSeadragon.WebGLDrawer.prototype;
+        const tiles = [
+            {tile: {texture: 'A'}},
+            {tile: {skip: true}},
+            {tile: {texture: 'B'}},
+            {tile: {texture: 'C'}},
+            {tile: {texture: null}}
+        ];
+        const batched = makeInstancedParityHarness(2);
+        const instanced = makeInstancedParityHarness(2);
+
+        proto._drawTilesBatched.call(batched.drawer, tiles, null, null, 2);
+        proto._drawTilesInstanced.call(instanced.drawer, tiles, null, null, 2);
+
+        assert.deepEqual(batched.gl.drawArraysCalls.map(call => call.count),
+            [12, 6], 'batched draws two valid tiles then one valid tile');
+        assert.deepEqual(instanced.gl.drawArraysInstancedCalls.map(
+            call => [call.count, call.instances]),
+        [[6, 2], [6, 1]], 'instanced draws only valid tiles across both batches');
+        assert.deepEqual(batched.gl.boundTextures.map(call => call.texture),
+            ['A', 'B', 'C'], 'batched path does not bind either missing tile');
+        assert.deepEqual(instanced.gl.boundTextures.map(call => call.texture),
+            ['A', 'B', 'C'], 'instanced path does not bind either missing tile');
+        assert.deepEqual(instanced.gl.activeTextures, [100, 101, 100],
+            'remainder batch starts at texture unit zero');
+        assert.deepEqual(instanced.gl.uniform1ivCalls[0].value, [0, 1],
+            'instanced samplers correspond to the two available texture units');
+        assert.deepEqual(instanced.gl.bufferDataCalls.map(call => call.data.length),
+            [4, 4, 18, 2, 2, 2, 2, 9, 1, 1],
+            'second batch uploads one instance in each attribute buffer');
+        assert.deepEqual(instanced.gl.divisorCalls.slice(-7).map(call => call.value),
+            [0, 0, 0, 0, 0, 0, 0], 'all seven divisors are restored');
+
+        const empty = makeInstancedParityHarness(2);
+        proto._drawTilesInstanced.call(empty.drawer,
+            [{tile: {skip: true}}, {tile: {texture: null}}], null, null, 2);
+        assert.strictEqual(empty.gl.drawArraysInstancedCalls.length, 0,
+            'all-missing input does not draw stale instances');
+        assert.strictEqual(empty.gl.boundTextures.length, 0,
+            'all-missing input does not bind stale textures');
+    });
+
 })();
