@@ -871,6 +871,81 @@
         })();
     });
 
+
+    // ----------
+    QUnit.test('benchmark explicit zero warmups skip callbacks', function(test) {
+        const done = test.async();
+        const type = '__TEST__zeroWarmupCounts';
+        Converter.registerTestDataGenerator(type, size => ({ size }));
+
+        (async function() {
+            try {
+                const examples = [
+                    { sizes: [4], iterations: 2, expected: [4, 4] },
+                    { sizes: [4, 8], iterations: 1, expected: [4, 8] }
+                ];
+
+                for (const example of examples) {
+                    const seen = [];
+                    const result = await Converter.benchmark(type, (tile, data) => {
+                        seen.push(data.size);
+                        return data;
+                    }, {
+                        sizes: example.sizes,
+                        iterations: example.iterations,
+                        warmupIterations: 0
+                    });
+
+                    test.deepEqual(seen, example.expected,
+                        "Zero warmups produce only measured callbacks for " + example.sizes.join(","));
+                    for (const size of example.sizes) {
+                        test.equal(result.measurements[size].times.length, example.iterations,
+                            "Only measured iterations have samples at size " + size);
+                    }
+                }
+            } catch (error) {
+                test.ok(false, "Benchmark rejected unexpectedly: " + error);
+            } finally {
+                delete Converter._testDataGenerators[type];
+                done();
+            }
+        })();
+    });
+
+    // ----------
+    QUnit.test('benchmark omitted and explicit one warmup preserve callback counts', function(test) {
+        const done = test.async();
+        const type = '__TEST__oneWarmupCounts';
+        Converter.registerTestDataGenerator(type, size => ({ size }));
+
+        (async function() {
+            try {
+                const cases = [
+                    { label: 'explicit one', options: { sizes: [4], iterations: 2, warmupIterations: 1 } },
+                    { label: 'omitted default', options: { sizes: [4], iterations: 2 } }
+                ];
+
+                for (const example of cases) {
+                    const seen = [];
+                    const result = await Converter.benchmark(type, (tile, data) => {
+                        seen.push(data.size);
+                        return data;
+                    }, example.options);
+
+                    test.deepEqual(seen, [4, 4, 4],
+                        example.label + ": one warmup then two measured callbacks");
+                    test.equal(result.measurements[4].times.length, 2,
+                        example.label + ": warmup is not included in timing samples");
+                }
+            } catch (error) {
+                test.ok(false, "Benchmark rejected unexpectedly: " + error);
+            } finally {
+                delete Converter._testDataGenerators[type];
+                done();
+            }
+        })();
+    });
+
     // ----------
     QUnit.test('benchmark rejects when generator or conversion fails', function(test) {
         const done = test.async();

@@ -722,7 +722,7 @@ OpenSeadragon.DataTypeConverter = class DataTypeConverter {
         options = options || {};
         var sizes = Array.isArray(options.sizes) ? options.sizes.slice() : [64, 128, 256];
         var iterations = options.iterations || 3;
-        var warmupIterations = options.warmupIterations || 1;
+        var warmupIterations = options.warmupIterations === 0 ? 0 : (options.warmupIterations || 1);
         var now = function() {
             // eslint-disable-next-line compat/compat
             if (typeof performance !== 'undefined' && performance && typeof performance.now === 'function') {
