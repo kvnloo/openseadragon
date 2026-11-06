@@ -296,10 +296,12 @@
         assert.throws(function() {
             first.xhr.respond(200);
         }, /Callback failed/, 'A queued request throws to whatever was draining the queue');
-        assert.strictEqual(OpenSeadragon.AjaxQueue.numActiveRequests, 0, 'It frees its slot too');
+        assert.strictEqual(first.successCount, 1, 'The completed request receives its callback');
+        assert.strictEqual(next.xhr.sendCount, 1, 'The queue drains without a second setter call');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.numActiveRequests, 1, 'The next request owns the released slot');
 
-        OpenSeadragon.setAjaxLoaderLimit(1);
-        assert.strictEqual(next.xhr.sendCount, 1, 'The queue can still be drained afterwards');
+        next.xhr.respond(200);
+        assert.strictEqual(OpenSeadragon.AjaxQueue.numActiveRequests, 0, 'The final slot is released');
     });
 
     // ----------
@@ -405,6 +407,7 @@
             const blocker = request();
             const job = new OpenSeadragon.ImageJob({
                 src: 'fake-tile',
+                loadWithAjax: true,
                 timeout: timeoutMs,
                 source: {
                     downloadTileStart: function(context) {
@@ -444,6 +447,51 @@
             job.xhr.respond(200);
             assert.strictEqual(successes, 1, 'The tile finishes successfully once');
             assert.strictEqual(failures, 0, 'Queue wait does not fail the tile');
+        } finally {
+            window.setTimeout = originalSetTimeout;
+            window.clearTimeout = originalClearTimeout;
+        }
+    });
+
+    // ----------
+    QUnit.test('A non-AJAX ImageJob arms its timeout before source startup', function(assert) {
+        const originalSetTimeout = window.setTimeout;
+        const originalClearTimeout = window.clearTimeout;
+        const timeoutMs = 1381;
+        const fakeTimerId = 991338;
+        let timerArmed = false;
+        let completed = 0;
+
+        window.setTimeout = function(callback, delay) {
+            if (delay === timeoutMs) {
+                timerArmed = true;
+                return fakeTimerId;
+            }
+            return originalSetTimeout.apply(window, arguments);
+        };
+        window.clearTimeout = function(id) {
+            if (id !== fakeTimerId) {
+                return originalClearTimeout.call(window, id);
+            }
+        };
+
+        try {
+            const job = new OpenSeadragon.ImageJob({
+                src: 'non-ajax-tile',
+                loadWithAjax: false,
+                timeout: timeoutMs,
+                source: {
+                    downloadTileStart: function(context) {
+                        assert.ok(timerArmed, 'The timeout is active before the non-AJAX source starts');
+                        context.finish({ pixel: 1 }, null, 'image');
+                    }
+                },
+                callback: function() {
+                    completed++;
+                }
+            });
+            job.start();
+            assert.strictEqual(completed, 1, 'The non-AJAX job completes once');
         } finally {
             window.setTimeout = originalSetTimeout;
             window.clearTimeout = originalClearTimeout;

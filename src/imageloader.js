@@ -202,11 +202,45 @@ $.ImageJob.prototype = {
             self.fail(abortMessage || "Image load aborted.", null);
         };
 
-        this.jobId = window.setTimeout(function () {
+        const onTimeout = function() {
             self.abort("Image load exceeded timeout (" + self.timeout + " ms)");
-        }, this.timeout);
+        };
 
-        this.source.downloadTileStart(this);
+        if (!this.loadWithAjax) {
+            // Non-AJAX sources retain the original timeout-before-start behavior.
+            this.jobId = window.setTimeout(onTimeout, this.timeout);
+            this.source.downloadTileStart(this);
+            return;
+        }
+
+        // A queued AJAX request has no download timeout until its first send.
+        // Keep a truthy sentinel so finish(), fail(), and abort() work while queued.
+        this.jobId = -1;
+        try {
+            this.source.downloadTileStart(this);
+        } finally {
+            if (this.jobId === -1) {
+                // The standard TileSource uses userData.request; custom sources may
+                // keep the returned request directly on the job.
+                const request = this.userData.request || this.xhr;
+                if (request && typeof request._osdAjaxDispatched === "boolean") {
+                    const armTimeout = function() {
+                        if (self.jobId === -1) {
+                            self.jobId = window.setTimeout(onTimeout, self.timeout);
+                        }
+                    };
+                    request._osdAjaxDispatchListener = armTimeout;
+                    if (request._osdAjaxDispatched) {
+                        request._osdAjaxDispatchListener = null;
+                        armTimeout();
+                    }
+                } else {
+                    // Custom AJAX implementations without an OSD XHR still get
+                    // a timeout; only known queued requests can defer it.
+                    this.jobId = window.setTimeout(onTimeout, this.timeout);
+                }
+            }
+        }
     },
 
     /**

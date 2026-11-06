@@ -2501,6 +2501,11 @@ function OpenSeadragon( options ){
                 $.processAjaxQueue();
             };
 
+            // ImageJobs can attach a timeout callback after makeAjaxRequest returns.
+            // Keep dispatch state on the XHR so immediate sends are observable too.
+            request._osdAjaxDispatched = false;
+            request._osdAjaxDispatchListener = null;
+
             const startRequest = function() {
                 queue.numActiveRequests++;
                 let sent = false;
@@ -2512,12 +2517,25 @@ function OpenSeadragon( options ){
                         onCompleteRequest();
                     }
                 }
+                if (sent) {
+                    request._osdAjaxDispatched = true;
+                    const listener = request._osdAjaxDispatchListener;
+                    request._osdAjaxDispatchListener = null;
+                    if (listener) {
+                        listener();
+                    }
+                }
             };
 
             request.onreadystatechange = function() {
                 if ( request.readyState === 4 ) {
-                    onCompleteRequest();
-                    oldOnStateChange();
+                    try {
+                        onCompleteRequest();
+                    } finally {
+                        // Deliver this request's completion even if a later queued
+                        // request throws while the newly available slot is filled.
+                        oldOnStateChange();
+                    }
                 }
             };
 
@@ -2554,13 +2572,27 @@ function OpenSeadragon( options ){
             }
 
             queue.isProcessing = true;
+            let firstError;
+            let didThrow = false;
             try {
                 while (queue.requestFuncs.length > 0 &&
                     (!$.settings.ajaxLoaderLimit || queue.numActiveRequests < $.settings.ajaxLoaderLimit)) {
-                    queue.requestFuncs.shift()();
+                    try {
+                        queue.requestFuncs.shift()();
+                    } catch (error) {
+                        // A throwing application callback cannot strand later work.
+                        // Keep the first exception to rethrow after independent progress.
+                        if (!didThrow) {
+                            firstError = error;
+                            didThrow = true;
+                        }
+                    }
                 }
             } finally {
                 queue.isProcessing = false;
+            }
+            if (didThrow) {
+                throw firstError;
             }
         },
 
