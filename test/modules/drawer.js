@@ -839,6 +839,92 @@
 
                 done();
             });
+
+            // ----------
+            QUnit.test('getMaxTextures observes a newly invalid zero parameter', function(assert) {
+                createViewer({ drawer: ['webgl', 'canvas'] });
+                const type = viewer.drawer && viewer.drawer.getType();
+                assert.strictEqual(type, 'webgl', 'a working WebGL context is required');
+                if (type !== 'webgl') {
+                    return; // The preceding assertion fails; this is not a silent skip.
+                }
+
+                const manager = viewer.drawer._glContext;
+                const gl = manager.getContext();
+                const originalGetParameter = gl.getParameter;
+                const originalCount = manager.getMaxTextures();
+                assert.ok(Number.isInteger(originalCount) && originalCount > 0,
+                    'start with valid positive integer texture-unit count');
+
+                gl.getParameter = function(parameter) {
+                    return parameter === this.MAX_TEXTURE_IMAGE_UNITS ?
+                        0 : originalGetParameter.call(this, parameter);
+                };
+                try {
+                    assert.strictEqual(manager.getMaxTextures(), 0,
+                        'an invalid live parameter must not be hidden by the old cached count');
+                } finally {
+                    gl.getParameter = originalGetParameter;
+                }
+            });
+
+            // ----------
+            QUnit.test('getMaxTextures rejects negative and non-finite values', function(assert) {
+                createViewer({ drawer: ['webgl', 'canvas'] });
+                const type = viewer.drawer && viewer.drawer.getType();
+                assert.strictEqual(type, 'webgl', 'a working WebGL context is required');
+                if (type !== 'webgl') {
+                    return; // Failing prerequisite assertion; not a skip.
+                }
+
+                const manager = viewer.drawer._glContext;
+                const gl = manager.getContext();
+                const originalGetParameter = gl.getParameter;
+                let suppliedValue = -2;
+                gl.getParameter = function(parameter) {
+                    return parameter === this.MAX_TEXTURE_IMAGE_UNITS ?
+                        suppliedValue : originalGetParameter.call(this, parameter);
+                };
+
+                try {
+                    [-2, Infinity, NaN].forEach(function(value) {
+                        suppliedValue = value;
+                        assert.strictEqual(manager.getMaxTextures(), 0,
+                            String(value) + ' must be treated as unusable');
+                    });
+                } finally {
+                    gl.getParameter = originalGetParameter;
+                }
+            });
+
+            // ----------
+            QUnit.test('getMaxTextures rejects positive fractional unit counts', function(assert) {
+                createViewer({ drawer: ['webgl', 'canvas'] });
+                const type = viewer.drawer && viewer.drawer.getType();
+                assert.strictEqual(type, 'webgl', 'a working WebGL context is required');
+                if (type !== 'webgl') {
+                    return; // Failing prerequisite assertion; not a skip.
+                }
+
+                const manager = viewer.drawer._glContext;
+                const gl = manager.getContext();
+                const originalGetParameter = gl.getParameter;
+                let suppliedValue = 0.5;
+                gl.getParameter = function(parameter) {
+                    return parameter === this.MAX_TEXTURE_IMAGE_UNITS ?
+                        suppliedValue : originalGetParameter.call(this, parameter);
+                };
+
+                try {
+                    [0.5, 1.5].forEach(function(value) {
+                        suppliedValue = value;
+                        assert.strictEqual(manager.getMaxTextures(), 0,
+                            String(value) + ' is not a valid texture-unit count');
+                    });
+                } finally {
+                    gl.getParameter = originalGetParameter;
+                }
+            });
         }
     }
 

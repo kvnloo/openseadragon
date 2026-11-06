@@ -50,7 +50,7 @@
             return 0;
         }
 
-        return typeof maxTextures === 'number' && isFinite(maxTextures) && maxTextures > 0 ? maxTextures : 0;
+        return Number.isInteger(maxTextures) && maxTextures > 0 ? maxTextures : 0;
     }
 
     // Placeholder transform for batch slots that have no drawable tile: collapses the quad to a
