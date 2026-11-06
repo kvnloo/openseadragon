@@ -170,49 +170,46 @@
 
       const _this = this;
 
-      OpenSeadragon[ "IIPTileSource" ] = function( options ) {
-          $.makeAjaxRequest( {
-              url: url,
-              type: "GET",
-              async: true,
-              success: function ( xhr ) {
-                  try {
-                      OpenSeadragon[ "IIPTileSource" ].prototype.parseIIP.call( _this, xhr.responseText );
-                      _this.ready = true;
-                      _this.raiseEvent( 'ready', { tileSource: _this } );
-                  }
-                  catch( e ) {
-                      const msg = "IIPTileSource: Error parsing IIP metadata: " + e.message;
-                      _this.raiseEvent( 'open-failed', { message: msg, source: url } );
-                  }
-              },
-              error: function ( xhr, exc ) {
-                  const msg = "IIPTileSource: Unable to get IIP metadata from " + url;
-                  $.console.error( msg );
+      $.makeAjaxRequest( {
+        url: url,
+        type: "GET",
+        async: false,
+        withCredentials: this.ajaxWithCredentials,
+        headers: this.ajaxHeaders,
+        success: function( xhr ) {
+          try {
+            _this.parseIIP( xhr.responseText );
+            _this.ready = true;
+            _this.raiseEvent( 'ready', { tileSource: _this } );
+          }
+          catch( e ) {
+            const msg = "IIPTileSource: Error parsing IIP metadata: " + e.message;
+            _this.raiseEvent( 'open-failed', { message: msg, source: url } );
+          }
+        },
+        error: function( xhr, exc ) {
+          const msg = "IIPTileSource: Unable to get IIP metadata from " + url;
+          $.console.error( msg );
 
-                  function safe(prop) {
-                      try {
-                          return xhr[prop];
-                      } catch (e) {
-                          return undefined;
-                      }
-                  }
-                  const status = safe('status');
-                  const statusText = safe('statusText');
-                  const responseText = safe('responseText');
+          function safe(prop) {
+            try {
+              return xhr[prop];
+            } catch (e) {
+              return undefined;
+            }
+          }
 
-                  _this.raiseEvent( 'open-failed', {
-                      message: msg,
-                      source: url,
-                      xhr: xhr,
-                      status: status,
-                      statusText: statusText,
-                      responseText: responseText,
-                      exception: exc || null
-                  } );
-              }
+          _this.raiseEvent( 'open-failed', {
+            message: msg,
+            source: url,
+            xhr: xhr,
+            status: safe('status'),
+            statusText: safe('statusText'),
+            responseText: safe('responseText'),
+            exception: exc || null
           } );
-      };
+        }
+      } );
     },
 
 
