@@ -940,3 +940,103 @@
     }
 
 })();
+
+(function() {
+    let viewers;
+    let previousDensity;
+
+    QUnit.module('Shared WebGL geometry review', {
+        beforeEach: function() {
+            viewers = [];
+            previousDensity = OpenSeadragon.pixelDensityRatio;
+            OpenSeadragon.pixelDensityRatio = 1;
+        },
+        afterEach: function() {
+            viewers.forEach(function(viewer) {
+                viewer.destroy();
+            });
+            OpenSeadragon.pixelDensityRatio = previousDensity;
+        }
+    });
+
+    function makeViewer(id, width, height, shared) {
+        $('<div></div>').attr('id', id).css({
+            width: width + 'px',
+            height: height + 'px'
+        }).appendTo('#qunit-fixture');
+
+        // eslint-disable-next-line new-cap
+        const viewer = OpenSeadragon({
+            id: id,
+            drawer: 'webgl',
+            showNavigator: false,
+            showNavigationControl: false,
+            drawerOptions: {
+                webgl: { useSharedRenderer: shared }
+            }
+        });
+        viewers.push(viewer);
+        return viewer;
+    }
+
+    QUnit.test('orthogonal shapes grow shared canvas then shrink on release', function(assert) {
+        const wide = makeViewer('shared-wide', 320, 80, true);
+        assert.strictEqual(wide.drawer.getType(), 'webgl', 'WebGL is active');
+        const shared = wide.drawer._sharedContext;
+        assert.ok(shared, 'opt-in owns a shared context (RED on master)');
+        if (!shared) {
+            return;
+        }
+
+        const gl = shared.gl;
+        const viewportLimits = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+        assert.ok(
+            gl.getParameter(gl.MAX_TEXTURE_SIZE) >= 320 &&
+            gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) >= 320 &&
+            viewportLimits[0] >= 320 && viewportLimits[1] >= 320,
+            'GPU limits support the 320-pixel fixture'
+        );
+        assert.deepEqual([shared.canvas.width, shared.canvas.height],
+            [320, 80], 'one drawer has 25,600 shared pixels');
+        assert.strictEqual(shared.refCount, 1, 'one owner');
+
+        const tall = makeViewer('shared-tall', 80, 320, true);
+        assert.strictEqual(wide.drawer._glContext.getContext(),
+            tall.drawer._glContext.getContext(), 'two drawers use one GL context');
+        assert.deepEqual([shared.canvas.width, shared.canvas.height],
+            [320, 320], 'orthogonal maxima use 102,400 shared pixels');
+        assert.strictEqual(shared.refCount, 2, 'two owners');
+
+        wide.destroy();
+        viewers = viewers.filter(function(viewer) { return viewer !== wide; });
+        assert.deepEqual([shared.canvas.width, shared.canvas.height],
+            [80, 320], 'remaining drawer uses 25,600 shared pixels');
+        assert.strictEqual(shared.refCount, 1, 'one surviving owner');
+        assert.notOk(gl.isContextLost(), 'surviving GL context remains live');
+    });
+
+    QUnit.test('dedicated peer is excluded from shared ownership', function(assert) {
+        const first = makeViewer('shared-first', 128, 128, true);
+        const second = makeViewer('shared-second', 128, 128, true);
+        const dedicated = makeViewer('shared-optout', 128, 128, false);
+        const shared = first.drawer._sharedContext;
+        assert.ok(shared, 'shared opt-in context exists (RED on master)');
+        if (!shared) {
+            return;
+        }
+
+        const sharedGl = first.drawer._glContext.getContext();
+        const dedicatedGl = dedicated.drawer._glContext.getContext();
+        assert.strictEqual(second.drawer._glContext.getContext(),
+            sharedGl, 'opted-in peers share one GL context');
+        assert.notStrictEqual(dedicatedGl, sharedGl,
+            'opted-out peer has its own GL context');
+        assert.strictEqual(shared.refCount, 2, 'only opted-in owners counted');
+
+        second.destroy();
+        viewers = viewers.filter(function(viewer) { return viewer !== second; });
+        assert.strictEqual(shared.refCount, 1, 'releasing one owner preserves one');
+        assert.notOk(dedicatedGl.isContextLost(),
+            'shared release does not destroy dedicated peer context');
+    });
+})();
