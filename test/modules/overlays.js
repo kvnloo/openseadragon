@@ -1148,4 +1148,107 @@
             done();
         });
     });
+
+    function cssOverlayDegrees(overlay) {
+        const transformProperty = OpenSeadragon.getCssPropertyWithVendorPrefix('transform');
+        const transform = overlay.style[transformProperty] || '';
+        const match = transform.match(/rotate\(\s*([-+]?[0-9.eE]+)\s*(deg|rad)\s*\)/);
+        if (!match) {
+            return 0;
+        }
+        const angle = Number(match[1]);
+        return match[2] === 'rad' ? angle * 180 / Math.PI : angle;
+    }
+
+    QUnit.test('Point overlay keeps finite zero-degree legacy bounds', function(assert) {
+        const overlay = new OpenSeadragon.Overlay({
+            element: document.createElement('div'),
+            location: new OpenSeadragon.Point(0.25, 0.5),
+            width: 0.125,
+            height: 0.25
+        });
+
+        assert.strictEqual(overlay.bounds.x, 0.25, 'x remains unchanged');
+        assert.strictEqual(overlay.bounds.y, 0.5, 'y remains unchanged');
+        assert.strictEqual(overlay.bounds.width, 0.125, 'width remains unchanged');
+        assert.strictEqual(overlay.bounds.height, 0.25, 'height remains unchanged');
+        assert.ok(Number.isFinite(overlay.bounds.degrees),
+            'no NaN is introduced for an unrotated Point overlay');
+        assert.strictEqual(overlay.bounds.degrees, 0,
+            'legacy bounds have a finite zero-degree rotation');
+    });
+
+    QUnit.test('Rect local angle composes with viewport rotation and flip', function(assert) {
+        const done = assert.async();
+        viewer = OpenSeadragon({
+            id: 'example-overlays',
+            prefixUrl: '/build/openseadragon/images/',
+            tileSources: '/test/data/testpattern.dzi',
+            springStiffness: 100,
+            overlays: [{
+                id: 'fixed-overlay',
+                location: new OpenSeadragon.Rect(0.2, 0.3, 0.1, 0.2, 30),
+                rotationMode: OpenSeadragon.OverlayRotationMode.EXACT
+            }]
+        });
+
+        viewer.addOnceHandler('open', function() {
+            const overlay = viewer.getOverlayById('fixed-overlay');
+            assert.ok(overlay, 'Rect overlay is present');
+            if (!overlay) {
+                done();
+                return;
+            }
+
+            viewer._drawOverlays();
+            assert.ok(Math.abs(cssOverlayDegrees(overlay) - 30) < 1e-7,
+                '30° local rotation is visible at viewport 0°');
+
+            viewer.viewport.setRotation(45, true);
+            viewer._drawOverlays();
+            assert.ok(Math.abs(cssOverlayDegrees(overlay) - 75) < 1e-7,
+                '30° local and 45° viewport angles compose to 75°');
+
+            viewer.viewport.setRotation(0, true);
+            viewer.viewport.setFlip(true);
+            viewer._drawOverlays();
+            assert.ok(Math.abs(Math.abs(cssOverlayDegrees(overlay)) - 30) < 1e-7,
+                'flip preserves magnitude of 30° local angle');
+            const prop = OpenSeadragon.getCssPropertyWithVendorPrefix('transform');
+            assert.ok(overlay.style[prop].includes('scaleX(-1)'),
+                'flip transform is also preserved');
+
+            done();
+        });
+    });
+
+    QUnit.test('Viewer rotation option reaches Point overlay in degrees', function(assert) {
+        const done = assert.async();
+        viewer = OpenSeadragon({
+            id: 'example-overlays',
+            prefixUrl: '/build/openseadragon/images/',
+            tileSources: '/test/data/testpattern.dzi',
+            springStiffness: 100,
+            overlays: [{
+                id: 'fixed-overlay',
+                x: 0.2,
+                y: 0.3,
+                width: 0.1,
+                height: 0.2,
+                rotation: 90,
+                rotationMode: OpenSeadragon.OverlayRotationMode.EXACT
+            }]
+        });
+
+        viewer.addOnceHandler('open', function() {
+            const overlay = viewer.getOverlayById('fixed-overlay');
+            assert.ok(overlay, 'Point overlay is present');
+            if (overlay) {
+                viewer._drawOverlays();
+                assert.ok(Math.abs(cssOverlayDegrees(overlay) - 90) < 1e-7,
+                    'the public option is degrees and renders a quarter turn');
+            }
+            done();
+        });
+    });
 })();
