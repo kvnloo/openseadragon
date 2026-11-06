@@ -184,7 +184,22 @@
           }
           catch( e ) {
             const msg = "IIPTileSource: Error parsing IIP metadata: " + e.message;
-            _this.raiseEvent( 'open-failed', { message: msg, source: url } );
+            function safe(prop) {
+              try {
+                return xhr[prop];
+              } catch (err) {
+                return undefined;
+              }
+            }
+            _this.raiseEvent( 'open-failed', {
+              message: msg,
+              source: url,
+              xhr: xhr,
+              status: safe('status'),
+              statusText: safe('statusText'),
+              responseText: safe('responseText'),
+              exception: e
+            } );
           }
         },
         error: function( xhr, exc ) {

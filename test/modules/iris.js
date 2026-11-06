@@ -105,4 +105,91 @@
             "Tile URL for level 3, x=3, y=2 should match expected format"
         );
     });
+    QUnit.test('Iris HTTP 404 retains status and exposes response details', function(assert) {
+        const originalAjax = OpenSeadragon.makeAjaxRequest;
+        let request;
+        let failure;
+
+        OpenSeadragon.makeAjaxRequest = function(options) {
+            request = options;
+        };
+        try {
+            const source = new OpenSeadragon.IrisTileSource({
+                serverUrl: 'http://localhost',
+                slideId: '12345'
+            });
+            source.addHandler('open-failed', function(event) {
+                failure = event;
+            });
+
+            assert.ok(request, 'Iris metadata GET dispatched');
+            if (request) {
+                const xhr = {
+                    status: 404,
+                    statusText: 'Not Found',
+                    responseText: '{"detail":"slide missing"}'
+                };
+                const exception = new Error('HTTP 404');
+                request.error(xhr, exception);
+
+                assert.ok(failure, 'open-failed event emitted');
+                if (failure) {
+                    assert.strictEqual(failure.message,
+                        'IrisTileSource: Unable to get metadata from http://localhost/slides/12345/metadata',
+                        'existing failure message retained');
+                    assert.strictEqual(failure.source, source.getMetadataUrl(), 'metadata source retained');
+                    assert.strictEqual(failure.status, 404, 'legacy numeric status retained');
+                    assert.strictEqual(failure.statusText, 'Not Found', 'status text exposed');
+                    assert.strictEqual(failure.responseText, '{"detail":"slide missing"}',
+                        'server error body exposed');
+                    assert.strictEqual(failure.xhr, xhr, 'original XHR exposed');
+                    assert.strictEqual(failure.exception, exception, 'request exception retained');
+                    assert.strictEqual(source.ready, false, 'failed source remains not ready');
+                }
+            }
+        } finally {
+            OpenSeadragon.makeAjaxRequest = originalAjax;
+        }
+    });
+
+    QUnit.test('Iris malformed JSON exposes the successful response and parse exception', function(assert) {
+        const originalAjax = OpenSeadragon.makeAjaxRequest;
+        const responseText = '{"extent":';
+        let request;
+        let failure;
+
+        OpenSeadragon.makeAjaxRequest = function(options) {
+            request = options;
+        };
+        try {
+            const source = new OpenSeadragon.IrisTileSource({
+                serverUrl: 'http://localhost',
+                slideId: '12345'
+            });
+            source.addHandler('open-failed', function(event) {
+                failure = event;
+            });
+
+            assert.ok(request, 'Iris metadata GET dispatched');
+            if (request) {
+                const xhr = { status: 200, statusText: 'OK', responseText: responseText };
+                request.success(xhr);
+
+                assert.ok(failure, 'malformed JSON emits open-failed');
+                if (failure) {
+                    assert.ok(failure.message.indexOf('IrisTileSource: Error parsing metadata: ') === 0,
+                        'existing parsing error prefix retained');
+                    assert.strictEqual(failure.source, source.getMetadataUrl(), 'metadata URL retained');
+                    assert.strictEqual(failure.status, 200, 'HTTP success status retained on parse failure');
+                    assert.strictEqual(failure.statusText, 'OK', 'status text exposed');
+                    assert.strictEqual(failure.responseText, responseText, 'malformed JSON body exposed');
+                    assert.strictEqual(failure.xhr, xhr, 'original XHR exposed');
+                    assert.ok(failure.exception instanceof SyntaxError, 'JSON parse exception exposed');
+                    assert.strictEqual(source.ready, false, 'parse failure does not mark the source ready');
+                }
+            }
+        } finally {
+            OpenSeadragon.makeAjaxRequest = originalAjax;
+        }
+    });
 })();

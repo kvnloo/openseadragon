@@ -134,6 +134,52 @@
         }
     });
 
+    QUnit.test('IIP malformed metadata exposes XHR and parse exception', function(assert) {
+        const originalAjax = OpenSeadragon.makeAjaxRequest;
+        const originalConstructor = OpenSeadragon.IIPTileSource;
+        const responseText = 'Tile-size:256 256\r\n';
+        let request;
+        let failure;
+
+        OpenSeadragon.makeAjaxRequest = function(options) {
+            request = options;
+        };
+        try {
+            const source = new originalConstructor({
+                iipsrv: 'http://localhost/fcgi-bin/iipsrv.fcgi',
+                image: 'test.tif'
+            });
+            source.addHandler('open-failed', function(event) {
+                failure = event;
+            });
+
+            assert.ok(request, 'IIP metadata GET dispatched');
+            if (request) {
+                const xhr = { status: 200, statusText: 'OK', responseText: responseText };
+                request.success(xhr);
+
+                assert.ok(failure, 'malformed IIP metadata emits open-failed');
+                if (failure) {
+                    assert.strictEqual(failure.source, source.getMetadataUrl(), 'metadata URL retained');
+                    assert.strictEqual(failure.message,
+                        'IIPTileSource: Error parsing IIP metadata: No Max-size returned',
+                        'original parse error message retained');
+                    assert.strictEqual(failure.status, 200, 'successful HTTP status retained on parse failure');
+                    assert.strictEqual(failure.statusText, 'OK', 'HTTP status text exposed');
+                    assert.strictEqual(failure.responseText, responseText, 'malformed response body exposed');
+                    assert.strictEqual(failure.xhr, xhr, 'original XHR exposed');
+                    assert.ok(failure.exception instanceof Error, 'parse exception object exposed');
+                    assert.strictEqual(failure.exception.message, 'No Max-size returned',
+                        'original parsing exception preserved');
+                    assert.strictEqual(source.ready, false, 'parse failure does not mark the source ready');
+                }
+            }
+        } finally {
+            OpenSeadragon.makeAjaxRequest = originalAjax;
+            OpenSeadragon.IIPTileSource = originalConstructor;
+        }
+    });
+
     QUnit.test('IIP HTTP failure emits status, response and original exception', function(assert) {
         const originalAjax = OpenSeadragon.makeAjaxRequest;
         const originalConstructor = OpenSeadragon.IIPTileSource;
