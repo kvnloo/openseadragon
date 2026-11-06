@@ -868,4 +868,397 @@
         }
     }
 
+    QUnit.module('WebGLDrawer internals');
+
+    function createFakeGl() {
+        const gl = {
+            TEXTURE0: 100,
+            TEXTURE_2D: 'TEXTURE_2D',
+            ARRAY_BUFFER: 'ARRAY_BUFFER',
+            DYNAMIC_DRAW: 'DYNAMIC_DRAW',
+            TRIANGLES: 'TRIANGLES',
+            FLOAT: 'FLOAT',
+            divisorCalls: [],
+            activeTextures: [],
+            boundTextures: [],
+            drawArraysCalls: [],
+            drawArraysInstancedCalls: [],
+            uniformMatrixCalls: [],
+            uniform1fvCalls: [],
+            uniform1ivCalls: [],
+            bufferDataCalls: [],
+            bindBufferCalls: [],
+            activeTexture(unit) {
+                this.activeTextures.push(unit);
+            },
+            bindTexture(target, texture) {
+                this.boundTextures.push({target, texture});
+            },
+            bindBuffer(target, buffer) {
+                this.bindBufferCalls.push({target, buffer});
+            },
+            bufferData(target, data, usage) {
+                this.bufferDataCalls.push({target, data: Array.from(data), usage});
+            },
+            uniformMatrix3fv(location, transpose, matrix) {
+                this.uniformMatrixCalls.push({location, transpose, matrix: Array.from(matrix)});
+            },
+            uniform1fv(location, value) {
+                this.uniform1fvCalls.push({location, value: Array.from(value)});
+            },
+            uniform1iv(location, value) {
+                this.uniform1ivCalls.push({location, value: Array.from(value)});
+            },
+            useProgram() {},
+            vertexAttribPointer() {},
+            vertexAttribDivisor(location, value) {
+                this.divisorCalls.push({location, value});
+            },
+            drawArrays(mode, first, count) {
+                this.drawArraysCalls.push({mode, first, count});
+            },
+            drawArraysInstanced(mode, first, count, instances) {
+                this.drawArraysInstancedCalls.push({mode, first, count, instances});
+            }
+        };
+        return gl;
+    }
+
+    function createFakeGlContext(gl, options = {}) {
+        return {
+            getContext() {
+                return gl;
+            },
+            getFirstPass() {
+                return options.firstPass || null;
+            },
+            getMaxTextures() {
+                return options.maxTextures || 0;
+            },
+            getUnitQuad() {
+                return options.unitQuad || null;
+            }
+        };
+    }
+
+    QUnit.test('WebGLDrawer batched rendering skips missing textures and does not bind beyond draw count', function(assert) {
+        const gl = createFakeGl();
+        const firstPass = {
+            shaderProgram: 'program',
+            bufferTexturePosition: 'textureBuffer',
+            bufferOutputPosition: 'outputBuffer',
+            bufferIndex: 'indexBuffer',
+            aOutputPosition: 'aOutput',
+            aTexturePosition: 'aTexture',
+            aIndex: 'aIndex',
+            uTransformMatrices: ['m0', 'm1'],
+            uOpacities: 'uOpacities'
+        };
+        const drawer = {
+            _glContext: createFakeGlContext(gl, {firstPass: firstPass, maxTextures: 2}),
+            getDataToDraw(tile) {
+                return tile.skip ? null : {texture: tile.texture};
+            },
+            _getTileData(tile, tiledImage, textureInfo, overallMatrix, index, texturePositionArray, textureDataArray, matrixArray, opacityArray) {
+                texturePositionArray.set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], index * 12);
+                textureDataArray[index] = textureInfo.texture;
+                matrixArray[index] = [index + 1, 0, 0, 0, index + 1, 0, 0, 0, 1];
+                opacityArray[index] = 1;
+            },
+            _allocateBatchBuffers: OpenSeadragon.WebGLDrawer.prototype._allocateBatchBuffers,
+            _bindTileTextures: OpenSeadragon.WebGLDrawer.prototype._bindTileTextures
+        };
+
+        OpenSeadragon.WebGLDrawer.prototype._drawTilesBatched.call(drawer, [
+            {tile: {texture: 'tex-a'}},
+            {tile: {skip: true}},
+            {tile: {texture: 'tex-b'}}
+        ], null, null, 2);
+
+        assert.deepEqual(gl.activeTextures, [100, 101], 'binds exactly the used texture units');
+        assert.deepEqual(gl.boundTextures.map(item => item.texture), ['tex-a', 'tex-b'], 'binds only drawable tile textures');
+        assert.strictEqual(gl.drawArraysCalls.length, 1, 'draws a single batch');
+        assert.strictEqual(gl.drawArraysCalls[0].count, 12, 'draw count reflects the two drawable tiles');
+        assert.strictEqual(gl.uniformMatrixCalls.length, 2, 'updates uniforms only for drawable tiles');
+        assert.deepEqual(gl.uniform1fvCalls[0].value, [1, 1], 'opacity uniform excludes skipped tiles');
+
+        const buffers = [drawer._batchTexturePosition, drawer._batchTextures, drawer._batchMatrices, drawer._batchOpacities];
+        OpenSeadragon.WebGLDrawer.prototype._drawTilesBatched.call(drawer, [
+            {tile: {skip: true}},
+            {tile: {texture: 'tex-c'}}
+        ], null, null, 2);
+        assert.ok(buffers.every((buffer, index) => buffer === [drawer._batchTexturePosition, drawer._batchTextures, drawer._batchMatrices, drawer._batchOpacities][index]), 'reuses all batch buffers across draws');
+        assert.strictEqual(gl.drawArraysCalls[1].count, 6, 'a smaller batch does not draw stale slots');
+        assert.deepEqual(gl.uniform1fvCalls[1].value, [1], 'a smaller batch uploads only its active opacity');
+    });
+
+    QUnit.test('WebGLDrawer instanced rendering resets divisors after draw failure', function(assert) {
+        const gl = createFakeGl();
+        gl.drawArraysInstanced = function(mode, first, count, instances) {
+            this.drawArraysInstancedCalls.push({mode, first, count, instances});
+            throw new Error('draw failed');
+        };
+
+        const pass = {
+            shaderProgram: 'instanced-program',
+            uImages: 'uImages',
+            bufferTexturePositionTL: 'tlBuffer',
+            bufferTexturePositionSize: 'sizeBuffer',
+            bufferTransformMatrix: 'matrixBuffer',
+            bufferOpacity: 'opacityBuffer',
+            bufferTextureIndex: 'indexBuffer',
+            bufferOutputPosition: 'outputBuffer',
+            aTexturePositionTL: 'aTL',
+            aTexturePositionSize: 'aSize',
+            aTransformCol0: 'aCol0',
+            aTransformCol1: 'aCol1',
+            aTransformCol2: 'aCol2',
+            aOpacity: 'aOpacity',
+            aTextureIndex: 'aTextureIndex',
+            aOutputPosition: 'aOutput'
+        };
+        const drawer = {
+            _glContext: createFakeGlContext(gl),
+            _firstPassInstanced: pass,
+            _glNumTextures: 3,
+            _textureUnitIndices: null,
+            _instancedArrays: null,
+            _instancedArrayCapacity: 0,
+            getDataToDraw(tile) {
+                return tile.skip ? null : {texture: tile.texture};
+            },
+            _getTextureUnitIndices: OpenSeadragon.WebGLDrawer.prototype._getTextureUnitIndices,
+            _ensureInstancedArrays: OpenSeadragon.WebGLDrawer.prototype._ensureInstancedArrays,
+            _allocateBatchBuffers: OpenSeadragon.WebGLDrawer.prototype._allocateBatchBuffers,
+            _bindTileTextures: OpenSeadragon.WebGLDrawer.prototype._bindTileTextures,
+            _resetInstancedAttributeDivisors: OpenSeadragon.WebGLDrawer.prototype._resetInstancedAttributeDivisors,
+            _getTileDataInstanced(tile, tiledImage, textureInfo, overallMatrix, index, texturePositionTLArray, texturePositionSizeArray, transformMatrixArray, opacityArray, textureIndexArray, textureDataArray) {
+                texturePositionTLArray.set([0, 0], index * 2);
+                texturePositionSizeArray.set([1, 1], index * 2);
+                transformMatrixArray.set([1, 0, 0, 0, 1, 0, 0, 0, 1], index * 9);
+                opacityArray[index] = 1;
+                textureIndexArray[index] = index;
+                textureDataArray[index] = textureInfo.texture;
+            }
+        };
+
+        assert.throws(function() {
+            OpenSeadragon.WebGLDrawer.prototype._drawTilesInstanced.call(drawer, [
+                {tile: {texture: 'tex-a'}},
+                {tile: {skip: true}},
+                {tile: {texture: 'tex-b'}}
+            ], null, null, 4);
+        }, /draw failed/, 'surfaces the draw failure');
+
+        assert.strictEqual(gl.drawArraysInstancedCalls.length, 1, 'attempts one instanced draw');
+        assert.strictEqual(gl.drawArraysInstancedCalls[0].instances, 2, 'draw count excludes skipped tiles');
+        assert.deepEqual(gl.boundTextures.map(item => item.texture), ['tex-a', 'tex-b'], 'binds only drawable tile textures');
+
+        const resetCalls = gl.divisorCalls.slice(-7);
+        assert.deepEqual(resetCalls, [
+            {location: 'aTL', value: 0},
+            {location: 'aSize', value: 0},
+            {location: 'aCol0', value: 0},
+            {location: 'aCol1', value: 0},
+            {location: 'aCol2', value: 0},
+            {location: 'aOpacity', value: 0},
+            {location: 'aTextureIndex', value: 0}
+        ], 'always resets instanced divisors in finally');
+    });
+
+    QUnit.test('WebGLDrawer instanced shader setup falls back when shader compilation throws', function(assert) {
+        const originalInitShaderProgram = OpenSeadragon.WebGLDrawer.initShaderProgram;
+        const warnings = [];
+
+        OpenSeadragon.WebGLDrawer.initShaderProgram = function() {
+            throw new Error('shader compile failed');
+        };
+
+        const gl = {
+            ARRAY_BUFFER: 'ARRAY_BUFFER',
+            FLOAT: 'FLOAT',
+            STATIC_DRAW: 'STATIC_DRAW',
+            createBuffer() { return {}; },
+            createProgram() { return {}; },
+            bindBuffer() {},
+            bufferData() {},
+            enableVertexAttribArray() {},
+            vertexAttribPointer() {},
+            vertexAttribDivisor() {},
+            getAttribLocation() { return 0; },
+            getUniformLocation() { return {}; },
+            useProgram() {},
+            uniform1iv() {}
+        };
+        const drawer = {
+            _glContext: createFakeGlContext(gl, {
+                maxTextures: 2,
+                unitQuad: new Float32Array([0, 0, 1, 0, 0, 1])
+            }),
+            _textureUnitIndices: null,
+            _firstPassInstanced: {stale: true},
+            isWebGL2() {
+                return true;
+            },
+            _getTextureUnitIndices: OpenSeadragon.WebGLDrawer.prototype._getTextureUnitIndices,
+            _resetInstancedAttributeDivisors: OpenSeadragon.WebGLDrawer.prototype._resetInstancedAttributeDivisors
+        };
+
+        const originalWarn = OpenSeadragon.console.warn;
+        OpenSeadragon.console.warn = function() {
+            warnings.push(Array.from(arguments).join(' '));
+        };
+
+        try {
+            OpenSeadragon.WebGLDrawer.prototype._makeFirstPassInstancedShaderProgram.call(drawer);
+        } finally {
+            OpenSeadragon.WebGLDrawer.initShaderProgram = originalInitShaderProgram;
+            OpenSeadragon.console.warn = originalWarn;
+        }
+
+        assert.strictEqual(drawer._firstPassInstanced, null, 'clears the instanced program on setup failure');
+        assert.ok(warnings.some(msg => msg.indexOf('falling back to batched rendering') >= 0), 'logs a fallback warning');
+    });
+
+
+    QUnit.module('WebGLDrawer instanced batch parity');
+
+    function makeInstancedParityHarness(maxTextures) {
+        const gl = createFakeGl();
+        const proto = OpenSeadragon.WebGLDrawer.prototype;
+        const firstPass = {
+            shaderProgram: 'batched',
+            bufferTexturePosition: 'uv',
+            bufferOutputPosition: 'xy',
+            bufferIndex: 'index',
+            aOutputPosition: 'out',
+            aTexturePosition: 'uvAttr',
+            aIndex: 'indexAttr',
+            uTransformMatrices: Array.from({length: maxTextures}, (_, i) => 'm' + i),
+            uOpacities: 'opacities'
+        };
+        const instancedPass = {
+            shaderProgram: 'instanced',
+            uImages: 'images',
+            bufferTexturePositionTL: 'tl',
+            bufferTexturePositionSize: 'size',
+            bufferTransformMatrix: 'matrix',
+            bufferOpacity: 'alpha',
+            bufferTextureIndex: 'textureIndex',
+            bufferOutputPosition: 'out',
+            aTexturePositionTL: 'tlAttr',
+            aTexturePositionSize: 'sizeAttr',
+            aTransformCol0: 'c0',
+            aTransformCol1: 'c1',
+            aTransformCol2: 'c2',
+            aOpacity: 'alphaAttr',
+            aTextureIndex: 'texAttr',
+            aOutputPosition: 'outAttr'
+        };
+        const drawer = {
+            _glContext: createFakeGlContext(gl, {maxTextures, firstPass}),
+            _firstPassInstanced: instancedPass,
+            _textureUnitIndices: null,
+            _instancedArrays: null,
+            _instancedArrayCapacity: 0,
+            getDataToDraw(tile) {
+                return tile.skip ? null : {texture: tile.texture};
+            },
+            _allocateBatchBuffers: proto._allocateBatchBuffers,
+            _bindTileTextures: proto._bindTileTextures,
+            _getTextureUnitIndices: proto._getTextureUnitIndices,
+            _ensureInstancedArrays: proto._ensureInstancedArrays,
+            _resetInstancedAttributeDivisors: proto._resetInstancedAttributeDivisors,
+            _getTileData(tile, image, info, matrix, index, coordinates,
+                textures, matrices, opacities) {
+                coordinates.fill(0, index * 12, index * 12 + 12);
+                textures[index] = info.texture;
+                matrices[index] = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+                opacities[index] = 1;
+            },
+            _getTileDataInstanced(tile, image, info, matrix, index,
+                positionTL, size, matrices, opacities, textureIndices, textures) {
+                positionTL.set([0, 0], index * 2);
+                size.set([1, 1], index * 2);
+                matrices.set([1, 0, 0, 0, 1, 0, 0, 0, 1], index * 9);
+                opacities[index] = 1;
+                textureIndices[index] = index;
+                textures[index] = info.texture;
+            }
+        };
+        return {gl, drawer};
+    }
+
+    QUnit.test('batched and instanced paths keep identical texture-group draw counts', function(assert) {
+        const proto = OpenSeadragon.WebGLDrawer.prototype;
+        [
+            {tiles: 1, batched: [6], instanced: [[6, 1]]},
+            {tiles: 4, batched: [24], instanced: [[6, 4]]},
+            {tiles: 5, batched: [24, 6], instanced: [[6, 4], [6, 1]]}
+        ].forEach(sample => {
+            const tiles = Array.from({length: sample.tiles},
+                (_, i) => ({tile: {texture: 't' + i}}));
+            const batched = makeInstancedParityHarness(4);
+            const instanced = makeInstancedParityHarness(4);
+
+            proto._drawTilesBatched.call(batched.drawer, tiles, null, null, 4);
+            proto._drawTilesInstanced.call(instanced.drawer, tiles, null, null, 4);
+
+            assert.deepEqual(batched.gl.drawArraysCalls.map(call => call.count),
+                sample.batched, 'WebGL1 vertex counts for ' + sample.tiles + ' tiles');
+            assert.deepEqual(instanced.gl.drawArraysInstancedCalls.map(
+                call => [call.count, call.instances]),
+            sample.instanced, 'WebGL2 vertices and instances for ' + sample.tiles + ' tiles');
+            assert.strictEqual(batched.gl.drawArraysCalls.length,
+                instanced.gl.drawArraysInstancedCalls.length,
+                'both paths make the same number of calls for ' + sample.tiles + ' tiles');
+            assert.deepEqual(batched.gl.boundTextures.map(call => call.texture),
+                instanced.gl.boundTextures.map(call => call.texture),
+                'both paths bind the same tiles in the same order');
+        });
+    });
+
+    QUnit.test('sparse tiles compact across batches without stale uploads', function(assert) {
+        const proto = OpenSeadragon.WebGLDrawer.prototype;
+        const tiles = [
+            {tile: {texture: 'A'}},
+            {tile: {skip: true}},
+            {tile: {texture: 'B'}},
+            {tile: {texture: 'C'}},
+            {tile: {texture: null}}
+        ];
+        const batched = makeInstancedParityHarness(2);
+        const instanced = makeInstancedParityHarness(2);
+
+        proto._drawTilesBatched.call(batched.drawer, tiles, null, null, 2);
+        proto._drawTilesInstanced.call(instanced.drawer, tiles, null, null, 2);
+
+        assert.deepEqual(batched.gl.drawArraysCalls.map(call => call.count),
+            [12, 6], 'batched draws two valid tiles then one valid tile');
+        assert.deepEqual(instanced.gl.drawArraysInstancedCalls.map(
+            call => [call.count, call.instances]),
+        [[6, 2], [6, 1]], 'instanced draws only valid tiles across both batches');
+        assert.deepEqual(batched.gl.boundTextures.map(call => call.texture),
+            ['A', 'B', 'C'], 'batched path does not bind either missing tile');
+        assert.deepEqual(instanced.gl.boundTextures.map(call => call.texture),
+            ['A', 'B', 'C'], 'instanced path does not bind either missing tile');
+        assert.deepEqual(instanced.gl.activeTextures, [100, 101, 100],
+            'remainder batch starts at texture unit zero');
+        assert.deepEqual(instanced.gl.uniform1ivCalls[0].value, [0, 1],
+            'instanced samplers correspond to the two available texture units');
+        assert.deepEqual(instanced.gl.bufferDataCalls.map(call => call.data.length),
+            [4, 4, 18, 2, 2, 2, 2, 9, 1, 1],
+            'second batch uploads one instance in each attribute buffer');
+        assert.deepEqual(instanced.gl.divisorCalls.slice(-7).map(call => call.value),
+            [0, 0, 0, 0, 0, 0, 0], 'all seven divisors are restored');
+
+        const empty = makeInstancedParityHarness(2);
+        proto._drawTilesInstanced.call(empty.drawer,
+            [{tile: {skip: true}}, {tile: {texture: null}}], null, null, 2);
+        assert.strictEqual(empty.gl.drawArraysInstancedCalls.length, 0,
+            'all-missing input does not draw stale instances');
+        assert.strictEqual(empty.gl.boundTextures.length, 0,
+            'all-missing input does not bind stale textures');
+    });
+
 })();
