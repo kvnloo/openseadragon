@@ -88,7 +88,9 @@
      * is specified, the overlay will be located at this location with respect
      * to the placement option. If a {@link OpenSeadragon.Rect} is specified,
      * the overlay will be placed at this location with the corresponding width
-     * and height and placement TOP_LEFT.
+     * and height and placement TOP_LEFT. Its degrees are used as the local
+     * rotation unless options.rotation is specified. In either case, rotation
+     * pivots about the overlay placement, not a Rect's geometric origin.
      * @param {OpenSeadragon.Placement} [options.placement=OpenSeadragon.Placement.TOP_LEFT]
      * Defines what part of the overlay should be at the specified options.location
      * @param {OpenSeadragon.Overlay.OnDrawCallback} [options.onDraw]
@@ -102,6 +104,8 @@
      * @param {Number} [options.height] The height of the overlay in viewport
      * coordinates. If specified, the height of the overlay will be adjusted when
      * the zoom changes.
+     * @param {Number} [options.rotation=0] Local rotation in degrees about
+     * the overlay placement. Overrides location.degrees for Rect overlays.
      * @param {Boolean} [options.rotationMode=OpenSeadragon.OverlayRotationMode.EXACT]
      * How to handle the rotation of the viewport.
      */
@@ -162,12 +166,15 @@
             this.height = options.height === undefined ? null : options.height;
 
             this.rotationMode = options.rotationMode || $.OverlayRotationMode.EXACT;
+            this.rotation = options.rotation === undefined ? 0 : options.rotation;
 
             // Having a rect as location is a syntactic sugar
             if (this.location instanceof $.Rect) {
                 this.width = this.location.width;
                 this.height = this.location.height;
-                this.rotation = this.location.degrees * (Math.PI / 180.0);
+                if (options.rotation === undefined) {
+                    this.rotation = this.location.degrees;
+                }
                 this.location = this.location.getTopLeft();
                 this.placement = $.Placement.TOP_LEFT;
             }
@@ -175,7 +182,7 @@
             // Deprecated properties kept for backward compatibility.
             this.scales = this.width !== null && this.height !== null;
             this.bounds = new $.Rect(
-            this.location.x, this.location.y, this.width, this.height, this.rotation * (180.0 / Math.PI));
+            this.location.x, this.location.y, this.width, this.height, this.rotation);
             this.position = this.location;
         },
 
@@ -273,8 +280,6 @@
                 outerScale = viewport.flipped ? " scaleX(-1)" : " scaleX(1)";
             }
             const rotate = viewport.flipped ? -positionAndSize.rotate : positionAndSize.rotate;
-            const overlayRotationRadians = this.rotation;
-            //const overlayRotationDegrees =  overlayRotationRadians * (180.0 / Math.PI);
             const scale = viewport.flipped ? " scaleX(-1)" : "";
             // call the onDraw callback if it exists to allow one to overwrite
             // the drawing/positioning/sizing of the overlay
@@ -312,7 +317,7 @@
                     } else {
                         innerStyle[transformProp] = "";
                         style[transformOriginProp] = "";
-                        style[transformProp] = "rotate(" + overlayRotationRadians + "rad)";
+                        style[transformProp] = "";
                     }
                 }
                 style.display = 'flex';
@@ -325,20 +330,22 @@
             let size = this._getSizeInPixels(viewport);
             this.adjust(position, size);
 
-            let rotate = 0;
-            if (viewport.getRotation(true) &&
-                this.rotationMode !== $.OverlayRotationMode.NO_ROTATION) {
-                // BOUNDING_BOX is only valid if both directions get scaled.
-                // Get replaced by EXACT otherwise.
-                if (this.rotationMode === $.OverlayRotationMode.BOUNDING_BOX &&
-                    this.width !== null && this.height !== null) {
+            const viewportRotation = viewport.getRotation(true);
+            let rotate = this.rotation;
+            // A fully scalable bounding box absorbs both rotations in its size.
+            // Otherwise EXACT composes the local and viewport angles; NO_ROTATION
+            // keeps only the local angle. All angles here are in degrees.
+            if (this.rotationMode === $.OverlayRotationMode.BOUNDING_BOX &&
+                this.width !== null && this.height !== null) {
+                if (rotate || viewportRotation) {
                     const rect = new $.Rect(position.x, position.y, size.x, size.y);
-                    const boundingBox = this._getBoundingBox(rect, viewport.getRotation(true));
+                    const boundingBox = this._getBoundingBox(rect, rotate + viewportRotation);
                     position = boundingBox.getTopLeft();
                     size = boundingBox.getSize();
-                } else {
-                    rotate = viewport.getRotation(true);
                 }
+                rotate = 0;
+            } else if (this.rotationMode !== $.OverlayRotationMode.NO_ROTATION) {
+                rotate += viewportRotation;
             }
 
             if (viewport.flipped) {
@@ -444,7 +451,9 @@
                 checkResize: options.checkResize || this.checkResize,
                 width: options.width !== undefined ? options.width : this.width,
                 height: options.height !== undefined ? options.height : this.height,
-                rotationMode: options.rotationMode || this.rotationMode
+                rotationMode: options.rotationMode || this.rotationMode,
+                rotation: options.rotation !== undefined ? options.rotation :
+                    (options.location instanceof $.Rect ? undefined : this.rotation)
             });
         },
 
@@ -476,18 +485,11 @@
 
         // private
         _adjustBoundsForRotation: function(viewport, bounds) {
-            if (!viewport ||
-                viewport.getRotation(true) === 0 ||
-                this.rotationMode === $.OverlayRotationMode.EXACT) {
-                return bounds;
-            }
-            if (this.rotationMode === $.OverlayRotationMode.BOUNDING_BOX) {
-                // If overlay not fully scalable, BOUNDING_BOX falls back to EXACT
-                if (this.width === null || this.height === null) {
-                    return bounds;
-                }
-                // It is easier to just compute the position and size and
-                // convert to viewport coordinates.
+            const viewportRotation = viewport ? viewport.getRotation(true) : 0;
+            if (viewport && this.rotationMode === $.OverlayRotationMode.BOUNDING_BOX &&
+                this.width !== null && this.height !== null &&
+                (viewportRotation || this.rotation)) {
+                // The bounding box has already absorbed both angles in pixels.
                 const positionAndSize = this._getOverlayPositionAndSize(viewport);
                 return viewport.viewerElementToViewportRectangle(new $.Rect(
                     positionAndSize.position.x,
@@ -496,9 +498,12 @@
                     positionAndSize.size.y));
             }
 
-            // NO_ROTATION case
-            return bounds.rotate(-viewport.getRotation(true),
-                this._getPlacementPoint(bounds));
+            // EXACT keeps its local orientation in viewport coordinates.
+            // NO_ROTATION counter-rotates the viewport, but still honors the
+            // overlay's own angle. Both rotate about the placement point.
+            const rotation = this.rotation -
+                (this.rotationMode === $.OverlayRotationMode.NO_ROTATION ? viewportRotation : 0);
+            return rotation ? bounds.rotate(rotation, this._getPlacementPoint(bounds)) : bounds;
         }
     };
 
