@@ -145,7 +145,19 @@ $.TileInvalidationManager = class {
         // Create finish processing callback
         originalCache.__finishProcessing = (asInvalidRun) => {
             state.wasOutdatedRun = state.wasOutdatedRun || asInvalidRun;
-            tile.processing = false;
+            // All members received this run's timestamp. Release each member,
+            // but never clear a newer run's processing state.
+            if (originalCache._tiles) {
+                for (const sharedTile of originalCache._tiles) {
+                    if (sharedTile.processing === tStamp) {
+                        sharedTile.processing = false;
+                    }
+                }
+            }
+            // The representative may have left the record while processing.
+            if (tile.processing === tStamp) {
+                tile.processing = false;
+            }
             originalCache.__finishProcessing = null;
             if (!asInvalidRun) {
                 originalCache.__resolve(tile);
