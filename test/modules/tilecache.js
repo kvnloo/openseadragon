@@ -264,6 +264,134 @@
         }
     });
 
+
+    // Regression for shared original-cache completion (upstream PR #2847).
+    // Use actual TileSource, TileCache, World and the native synchronous drawer.
+    async function probeSharedCacheProcessing(keys) {
+        OpenSeadragon.__SharedCacheProcessingTileSource =
+            class extends OpenSeadragon.TileSource {
+                supports(data) {
+                    return !!(data && data.isSharedCacheProcessingSource);
+                }
+
+                configure(data) {
+                    return {
+                        width: 64,
+                        height: 64,
+                        tileSize: 64,
+                        tileOverlap: 0,
+                        minLevel: 0,
+                        maxLevel: 0,
+                        tilesUrl: 'shared-cache-processing/' + data.key,
+                        fileFormat: '',
+                        displayRects: null
+                    };
+                }
+
+                getTileUrl(level, x, y) {
+                    return this.tilesUrl + '/' + level + '/' + x + '_' + y;
+                }
+
+                downloadTileStart(context) {
+                    context.finish(0, null, T_A);
+                }
+
+                getClosestLevel() {
+                    return Infinity;
+                }
+            };
+
+        const v = viewer = OpenSeadragon({
+            id: 'example',
+            prefixUrl: '/build/openseadragon/images/',
+            maxImageCacheCount: 200,
+            springStiffness: 100,
+            drawer: 'test-cache-drawer-sync'
+        });
+
+        try {
+            return await new Promise((resolve, reject) => {
+                v.addHandler('open', async () => {
+                    try {
+                        v.world.draw();
+                        await v.waitForFinishedJobsForTest();
+
+                        const tiles = v.tileCache.getLoadedTilesFor(null)
+                            .filter(tile => tile.loaded);
+                        if (tiles.length !== keys.length) {
+                            throw new Error('Expected ' + keys.length +
+                                ' loaded tiles, got ' + tiles.length);
+                        }
+
+                        const caches = tiles.map(tile =>
+                            tile.getCache(tile.originalCacheKey));
+                        if (caches.some(cache => !cache)) {
+                            throw new Error('Missing original cache');
+                        }
+
+                        const rounds = [];
+                        for (let round = 0; round < 2; round++) {
+                            const stamp = Math.max(
+                                OpenSeadragon.now(),
+                                ...caches.map(cache => cache.__invStamp || 0)
+                            ) + 10000;
+                            await v.world.requestTileInvalidateEvent(
+                                tiles, stamp, false, true
+                            );
+                            await Promise.all(tiles.map(tile =>
+                                tile.processingPromise));
+                            rounds.push(tiles.map(tile => tile.processing));
+                        }
+
+                        resolve({
+                            cacheCounts: caches.map(cache => cache.getTileCount()),
+                            rounds: rounds
+                        });
+                    } catch (error) {
+                        reject(error);
+                    }
+                });
+
+                v.open(keys.map(key => ({
+                    isSharedCacheProcessingSource: true,
+                    key: key
+                })));
+            });
+        } finally {
+            v.destroy();
+            viewer = null;
+            OpenSeadragon.__SharedCacheProcessingTileSource = null;
+        }
+    }
+
+    QUnit.test('shared originals release every processing flag', async function (assert) {
+        for (const count of [2, 3]) {
+            const result = await probeSharedCacheProcessing(
+                Array(count).fill('shared')
+            );
+            const clean = Array(count).fill(false);
+            assert.deepEqual(result.cacheCounts, Array(count).fill(count),
+                'each of ' + count + ' tiles refers to the same original cache');
+            assert.deepEqual(result.rounds, [clean, clean],
+                'all ' + count + ' siblings finish both invalidation rounds');
+        }
+    });
+
+    QUnit.test('single and independent originals release processing flags',
+        async function (assert) {
+            const single = await probeSharedCacheProcessing(['single']);
+            assert.deepEqual(single.cacheCounts, [1], 'single-tile cache');
+            assert.deepEqual(single.rounds, [[false], [false]],
+                'single tile finishes both rounds');
+
+            const independent = await probeSharedCacheProcessing(['a', 'b', 'c']);
+            assert.deepEqual(independent.cacheCounts, [1, 1, 1],
+                'one original cache per tile');
+            assert.deepEqual(independent.rounds,
+                [[false, false, false], [false, false, false]],
+                'independent tiles finish both rounds');
+        });
+
     // ----------
     QUnit.test('basics', function (assert) {
         const done = assert.async();
