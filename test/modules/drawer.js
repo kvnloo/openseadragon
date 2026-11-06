@@ -2,6 +2,7 @@
 
 (function() {
     let viewer;
+    let secondaryViewer;
     OpenSeadragon.getBuiltInDrawersForTest().forEach(runDrawerTests);
 
     function runDrawerTests(drawerType){
@@ -26,7 +27,11 @@
                 if (viewer){
                     viewer.destroy();
                 }
+                if (secondaryViewer) {
+                    secondaryViewer.destroy();
+                }
                 viewer = null;
+                secondaryViewer = null;
             }
         });
 
@@ -78,6 +83,147 @@
                 'isWebGL2 matches WebGL2 context availability'
             );
             done();
+        });
+
+        // ----------
+        QUnit.test('shared renderer default stays dedicated', function(assert) {
+            if (drawerType !== 'webgl') {
+                assert.expect(0);
+                return;
+            }
+
+            createViewer();
+            assert.notOk(viewer.drawer._useSharedRenderer, 'webgl drawers stay dedicated unless explicitly opted into shared rendering');
+        });
+
+        // ----------
+        QUnit.test('shared renderer renders different viewer sizes and survives one viewer being destroyed', function(assert) {
+            if (drawerType !== 'webgl') {
+                assert.expect(0);
+                return;
+            }
+
+            const timeout = Util.timeWatcher(assert, 5000);
+            const createTileSource = function() {
+                return {
+                    width: 24,
+                    height: 24,
+                    tileSize: 24,
+                    minLevel: 1,
+                    getTileUrl: function() {
+                        return '';
+                    },
+                    downloadTileStart: function(context) {
+                        const canvas = document.createElement('canvas');
+                        const canvasContext = canvas.getContext('2d');
+                        canvas.width = context.tile.size.x;
+                        canvas.height = context.tile.size.y;
+                        canvasContext.fillStyle = 'rgb(32, 96, 160)';
+                        canvasContext.fillRect(0, 0, canvas.width, canvas.height);
+                        context.finish(canvas, null, 'context2d');
+                    }
+                };
+            };
+            const createSharedViewer = function(id) {
+                // eslint-disable-next-line new-cap
+                return OpenSeadragon({
+                    id: id,
+                    prefixUrl: '/build/openseadragon/images/',
+                    springStiffness: 100,
+                    drawer: 'webgl',
+                    drawerOptions: {
+                        webgl: {
+                            useSharedRenderer: true
+                        }
+                    },
+                    tileSources: createTileSource()
+                });
+            };
+            const waitForRenderedFrame = function(targetViewer, callback) {
+                const handler = function() {
+                    const canvas = targetViewer.drawer.canvas;
+                    const pixel = targetViewer.drawer.context.getImageData(
+                        Math.floor(canvas.width / 2),
+                        Math.floor(canvas.height / 2),
+                        1,
+                        1
+                    ).data;
+
+                    if (pixel[3] === 0) {
+                        return;
+                    }
+
+                    targetViewer.removeHandler('update-viewport', handler);
+                    callback(pixel);
+                };
+                targetViewer.addHandler('update-viewport', handler);
+                targetViewer.forceRedraw();
+            };
+
+            $('#example').css({ width: '320px', height: '180px' });
+            $('<div></div>')
+                .attr('id', 'example-shared-secondary')
+                .css({ width: '160px', height: '100px' })
+                .appendTo('#qunit-fixture');
+
+            viewer = createSharedViewer('example');
+            secondaryViewer = createSharedViewer('example-shared-secondary');
+
+            assert.ok(viewer.drawer._useSharedRenderer, 'the first viewer opts into shared rendering');
+            assert.ok(secondaryViewer.drawer._useSharedRenderer, 'the second viewer opts into shared rendering');
+            assert.strictEqual(
+                viewer.drawer._glContext.getContext(),
+                secondaryViewer.drawer._glContext.getContext(),
+                'both viewers use the same WebGL context'
+            );
+            assert.notEqual(
+                viewer.drawer.canvas.width + 'x' + viewer.drawer.canvas.height,
+                secondaryViewer.drawer.canvas.width + 'x' + secondaryViewer.drawer.canvas.height,
+                'the viewers render at different output sizes'
+            );
+
+            let renderedViewers = 0;
+            const onInitialFrame = function(pixel) {
+                assert.ok(
+                    pixel[0] > 0 && pixel[1] > 0 && pixel[2] > 0 && pixel[3] > 0,
+                    'the shared renderer copies a visible frame to the output canvas'
+                );
+                renderedViewers++;
+
+                if (renderedViewers < 2) {
+                    return;
+                }
+
+                const sharedGl = secondaryViewer.drawer._glContext.getContext();
+                viewer.destroy();
+                viewer = null;
+
+                assert.strictEqual(
+                    secondaryViewer.drawer._glContext.getContext(),
+                    sharedGl,
+                    'destroying one viewer preserves the shared context for the other'
+                );
+
+                secondaryViewer.addOnceHandler('update-viewport', function() {
+                    const canvas = secondaryViewer.drawer.canvas;
+                    const remainingPixel = secondaryViewer.drawer.context.getImageData(
+                        Math.floor(canvas.width / 2),
+                        Math.floor(canvas.height / 2),
+                        1,
+                        1
+                    ).data;
+                    assert.ok(
+                        remainingPixel[0] > 0 && remainingPixel[1] > 0 && remainingPixel[2] > 0 && remainingPixel[3] > 0,
+                        'the remaining viewer continues to render after its peer is destroyed'
+                    );
+                    timeout.done();
+                });
+                secondaryViewer.viewport.zoomBy(1.01);
+                secondaryViewer.forceRedraw();
+            };
+
+            waitForRenderedFrame(viewer, onInitialFrame);
+            waitForRenderedFrame(secondaryViewer, onInitialFrame);
         });
 
         // ----------
@@ -441,7 +587,13 @@
                 const timeout = Util.timeWatcher(assert, 5000);
 
                 // Create viewer without tileSources so we can setup testing before we open and draw an image
-                createViewer();
+                createViewer({
+                    drawerOptions: {
+                        webgl: {
+                            useSharedRenderer: true
+                        }
+                    }
+                });
 
                 if (viewer.drawer.getType() !== 'webgl') {
                     assert.expect(0);
@@ -456,6 +608,12 @@
                 const oldGlContext = oldDrawer._glContext;
                 const gl = oldDrawer._glContext.getContext();
                 const originalGetParameter = gl.getParameter;
+                const outputWidth = oldDrawer._outputCanvas.width;
+                const outputHeight = oldDrawer._outputCanvas.height;
+
+                // Simulate another, larger viewer having grown the shared canvas.
+                oldDrawer._renderingCanvas.width = outputWidth + 100;
+                oldDrawer._renderingCanvas.height = outputHeight + 50;
 
                 gl.getParameter = function(param) {
                     if (param === gl.MAX_TEXTURE_IMAGE_UNITS) {
@@ -478,6 +636,9 @@
                     assert.notStrictEqual(viewer.drawer._glContext, oldGlContext, 'glContext is a new instance');
                     assert.ok(viewer.drawer._glContext.getContext(), 'new glContext has valid context');
                     assert.equal(viewer.drawer.getType(), 'webgl', 'viewer.drawer remains WebGL after recovery');
+                    assert.ok(viewer.drawer._useSharedRenderer, 'recovery preserves shared rendering');
+                    assert.equal(viewer.drawer._renderingCanvas.width, outputWidth, 'recovery uses this drawer\'s output width');
+                    assert.equal(viewer.drawer._renderingCanvas.height, outputHeight, 'recovery uses this drawer\'s output height');
                     done();
                 });
 
@@ -782,7 +943,7 @@
                     window.onerror = previousOnError;
                 };
                 window.onerror = function(message) {
-                    if (message && message.indexOf('MAX_TEXTURE_IMAGE_UNITS') !== -1) {
+                    if (message && message.indexOf('WebGL context lost or replaced') !== -1) {
                         restoreOnError();
                         timeout.done();
                         assert.strictEqual(viewer.drawer, oldDrawer, 'viewer.drawer unchanged when recovery disabled');
@@ -868,4 +1029,104 @@
         }
     }
 
+})();
+
+(function() {
+    let viewers;
+    let previousDensity;
+
+    QUnit.module('Shared WebGL geometry review', {
+        beforeEach: function() {
+            viewers = [];
+            previousDensity = OpenSeadragon.pixelDensityRatio;
+            OpenSeadragon.pixelDensityRatio = 1;
+        },
+        afterEach: function() {
+            viewers.forEach(function(viewer) {
+                viewer.destroy();
+            });
+            OpenSeadragon.pixelDensityRatio = previousDensity;
+        }
+    });
+
+    function makeViewer(id, width, height, shared) {
+        $('<div></div>').attr('id', id).css({
+            width: width + 'px',
+            height: height + 'px'
+        }).appendTo('#qunit-fixture');
+
+        // eslint-disable-next-line new-cap
+        const viewer = OpenSeadragon({
+            id: id,
+            drawer: 'webgl',
+            showNavigator: false,
+            showNavigationControl: false,
+            drawerOptions: {
+                webgl: { useSharedRenderer: shared }
+            }
+        });
+        viewers.push(viewer);
+        return viewer;
+    }
+
+    QUnit.test('orthogonal shapes grow shared canvas then shrink on release', function(assert) {
+        const wide = makeViewer('shared-wide', 320, 80, true);
+        assert.strictEqual(wide.drawer.getType(), 'webgl', 'WebGL is active');
+        const shared = wide.drawer._sharedContext;
+        assert.ok(shared, 'opt-in owns a shared context (RED on master)');
+        if (!shared) {
+            return;
+        }
+
+        const gl = shared.gl;
+        const viewportLimits = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+        assert.ok(
+            gl.getParameter(gl.MAX_TEXTURE_SIZE) >= 320 &&
+            gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) >= 320 &&
+            viewportLimits[0] >= 320 && viewportLimits[1] >= 320,
+            'GPU limits support the 320-pixel fixture'
+        );
+        assert.deepEqual([shared.canvas.width, shared.canvas.height],
+            [320, 80], 'one drawer has 25,600 shared pixels');
+        assert.strictEqual(shared.refCount, 1, 'one owner');
+
+        const tall = makeViewer('shared-tall', 80, 320, true);
+        assert.strictEqual(wide.drawer._glContext.getContext(),
+            tall.drawer._glContext.getContext(), 'two drawers use one GL context');
+        assert.deepEqual([shared.canvas.width, shared.canvas.height],
+            [320, 320], 'orthogonal maxima use 102,400 shared pixels');
+        assert.strictEqual(shared.refCount, 2, 'two owners');
+
+        wide.destroy();
+        viewers = viewers.filter(function(viewer) { return viewer !== wide; });
+        assert.deepEqual([shared.canvas.width, shared.canvas.height],
+            [80, 320], 'remaining drawer uses 25,600 shared pixels');
+        assert.strictEqual(shared.refCount, 1, 'one surviving owner');
+        assert.notOk(gl.isContextLost(), 'surviving GL context remains live');
+    });
+
+    QUnit.test('dedicated peer is excluded from shared ownership', function(assert) {
+        const first = makeViewer('shared-first', 128, 128, true);
+        const second = makeViewer('shared-second', 128, 128, true);
+        const dedicated = makeViewer('shared-optout', 128, 128, false);
+        const shared = first.drawer._sharedContext;
+        assert.ok(shared, 'shared opt-in context exists (RED on master)');
+        if (!shared) {
+            return;
+        }
+
+        const sharedGl = first.drawer._glContext.getContext();
+        const dedicatedGl = dedicated.drawer._glContext.getContext();
+        assert.strictEqual(second.drawer._glContext.getContext(),
+            sharedGl, 'opted-in peers share one GL context');
+        assert.notStrictEqual(dedicatedGl, sharedGl,
+            'opted-out peer has its own GL context');
+        assert.strictEqual(shared.refCount, 2, 'only opted-in owners counted');
+
+        second.destroy();
+        viewers = viewers.filter(function(viewer) { return viewer !== second; });
+        assert.strictEqual(shared.refCount, 1, 'releasing one owner preserves one');
+        assert.notOk(dedicatedGl.isContextLost(),
+            'shared release does not destroy dedicated peer context');
+    });
 })();
