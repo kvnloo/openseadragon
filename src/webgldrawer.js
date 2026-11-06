@@ -628,9 +628,9 @@
                 return false;
             }
 
-            matrixArray.forEach((matrix, index) => {
-                gl.uniformMatrix3fv(this._firstPass.uTransformMatrices[index], false, matrix);
-            });
+            for (let index = 0; index < activeMatrixCount; index++) {
+                gl.uniformMatrix3fv(this._firstPass.uTransformMatrices[index], false, matrixArray[index]);
+            }
             return true;
         }
 
