@@ -272,8 +272,11 @@ $.Navigator = function( options ){
 
     viewer.world.addHandler("item-index-change", function(event) {
         window.setTimeout(function(){
-            const item = _this.world.getItemAt(event.previousIndex);
-            _this.world.setItemIndex(item, event.newIndex);
+            const item = _this._getMatchingItem(event.item);
+            const index = viewer.world.getIndexOfItem(event.item);
+            if (item && index !== -1 && index < _this.world.getItemCount()) {
+                _this.world.setItemIndex(item, index);
+            }
         }, 1);
     });
 
