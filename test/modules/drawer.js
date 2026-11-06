@@ -81,6 +81,147 @@
         });
 
         // ----------
+        QUnit.test('uses UBO-backed first pass in WebGL2 mode', function(assert) {
+            const done = assert.async();
+            createViewer();
+
+            if (viewer.drawer.getType() !== 'webgl' || !viewer.drawer.isWebGL2()) {
+                assert.expect(0);
+                done();
+                return;
+            }
+
+            assert.ok(
+                viewer.drawer._glContext._firstPassUBO,
+                'WebGL2 renderer initializes the UBO-backed first-pass resources'
+            );
+            done();
+        });
+
+        // ----------
+        if (drawerType === 'webgl') {
+            QUnit.test('WebGL1 fallback only uploads active tile matrices', function(assert) {
+                createViewer();
+                const manager = viewer.drawer._glContext;
+                assert.ok(manager, 'WebGL drawer has a context manager');
+                if (!manager) {
+                    return; // Already failed the assertion; do not skip.
+                }
+
+                const oldGL = manager._gl;
+                const oldPass = manager._firstPass;
+                const oldUBO = manager._firstPassUBO;
+                const calls = [];
+                const matrices = Array.from({ length: 8 }, (_, i) =>
+                    new Float32Array([i + 1, 0, 0, 0, i + 1, 0, 0, 0, 1]));
+
+                try {
+                    manager._gl = {
+                        uniformMatrix3fv: function(location, transpose, matrix) {
+                            calls.push({ location, transpose, diagonal: matrix[0] });
+                        }
+                    };
+                    manager._firstPass = {
+                        uTransformMatrices: Array.from({ length: 8 }, (_, i) => 'slot-' + i)
+                    };
+                    manager._firstPassUBO = null; // Force the WebGL1/UBO-failure fallback.
+
+                    [1, 3, 8].forEach(function(active) {
+                        calls.length = 0;
+                        assert.strictEqual(manager.updateFirstPassMatrices(matrices, active), true);
+                        assert.deepEqual(
+                            calls.map(call => call.location),
+                            Array.from({ length: active }, (_, i) => 'slot-' + i),
+                            'only ' + active + ' active slots uploaded'
+                        );
+                        assert.deepEqual(
+                            calls.map(call => call.diagonal),
+                            Array.from({ length: active }, (_, i) => i + 1),
+                            'active matrices preserve order and values'
+                        );
+                        assert.ok(calls.every(call => call.transpose === false),
+                            'uniform matrices are not transposed');
+                    });
+                } finally {
+                    manager._gl = oldGL;
+                    manager._firstPass = oldPass;
+                    manager._firstPassUBO = oldUBO;
+                }
+            });
+
+            QUnit.test('WebGL2 UBO uploads the active std140 matrix prefix', function(assert) {
+                createViewer();
+                const manager = viewer.drawer._glContext;
+                assert.ok(manager, 'WebGL drawer has a context manager');
+                if (!manager) {
+                    return; // Already failed the assertion; do not skip.
+                }
+
+                const oldGL = manager._gl;
+                const oldPass = manager._firstPass;
+                const oldUBO = manager._firstPassUBO;
+                const uploads = [];
+                const bindings = [];
+                const buffer = {};
+                const matrices = Array.from({ length: 8 }, (_, i) => {
+                    const s = i + 1;
+                    return new Float32Array([s, 0, 0, 0, s, 0, s + 1, s + 2, 1]);
+                });
+
+                try {
+                    manager._gl = {
+                        UNIFORM_BUFFER: 35345,
+                        bindBuffer: function(target, object) {
+                            bindings.push({ target, object });
+                        },
+                        bufferSubData: function(target, offset, data) {
+                            uploads.push({
+                                target,
+                                offset,
+                                bytes: data.byteLength,
+                                values: Array.from(data)
+                            });
+                        }
+                    };
+                    manager._firstPass = {};
+                    manager._firstPassUBO = {
+                        buffer,
+                        matrixData: new Float32Array(8 * 12).fill(-9)
+                    };
+
+                    [1, 3, 8].forEach(function(active) {
+                        uploads.length = 0;
+                        bindings.length = 0;
+                        assert.strictEqual(manager.updateFirstPassMatrices(matrices, active), true);
+                        assert.strictEqual(bindings.length, 1, 'one UBO bind');
+                        assert.strictEqual(bindings[0].target, 35345);
+                        assert.strictEqual(bindings[0].object, buffer);
+                        assert.strictEqual(uploads.length, 1, 'one upload per batch');
+                        assert.strictEqual(uploads[0].target, 35345);
+                        assert.strictEqual(uploads[0].offset, 0);
+                        assert.strictEqual(uploads[0].bytes, active * 48,
+                            'only active matrices are uploaded');
+                        assert.deepEqual(
+                            uploads[0].values.slice(0, 12),
+                            [1, 0, 0, 0, 0, 1, 0, 0, 2, 3, 1, 0],
+                            'first mat3 has std140 padding and correct translation'
+                        );
+                        const last = active - 1;
+                        assert.deepEqual(
+                            uploads[0].values.slice(last * 12, (last + 1) * 12),
+                            [active, 0, 0, 0, 0, active, 0, 0, active + 1, active + 2, 1, 0],
+                            'last active matrix is packed correctly'
+                        );
+                    });
+                } finally {
+                    manager._gl = oldGL;
+                    manager._firstPass = oldPass;
+                    manager._firstPassUBO = oldUBO;
+                }
+            });
+        }
+
+        // ----------
         // The WebGL drawer preloads its internal cache, so gl.texImage2D happens in the tile
         // invalidation routine. Uploading from the drawing loop stalls exactly the frames on which
         // new tiles arrive, which throttles tile downloads to maxTilesPerFrame * fps.
