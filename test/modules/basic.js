@@ -24,6 +24,71 @@
         }
     });
 
+    // Verify public APIs exposed by the built distribution across toolchain changes.
+    QUnit.test('bundle preserves Point addition and negative modulo', function(assert) {
+        const a = new OpenSeadragon.Point(2, -3);
+        const b = new OpenSeadragon.Point(-5, 7);
+        const sum = a.plus(b);
+
+        assert.deepEqual([sum.x, sum.y], [-3, 4], 'Point components add');
+        assert.strictEqual(OpenSeadragon.positiveModulo(-13, 5), 2,
+            'negative modulo remains nonnegative');
+    });
+
+    QUnit.test('bundle preserves numeric semantic version fields', function(assert) {
+        const version = OpenSeadragon.version;
+        const parts = version.versionStr.split('.').map(Number);
+
+        assert.deepEqual(
+            [version.major, version.minor, version.revision],
+            parts,
+            'built version fields agree with version string'
+        );
+    });
+
+    QUnit.test('built IIFE exposes global with classic and module scripts', function(assert) {
+        const done = assert.async();
+        const modes = ['classic', 'module'];
+        let index = 0;
+
+        function loadNext() {
+            if (index === modes.length) {
+                done();
+                return;
+            }
+
+            const mode = modes[index++];
+            const frame = document.createElement('iframe');
+            frame.style.display = 'none';
+            frame.onload = function() {
+                frame.onload = null;
+                const script = frame.contentDocument.createElement('script');
+                if (mode === 'module') {
+                    script.type = 'module';
+                }
+                script.src = '/build/openseadragon/openseadragon.js';
+                script.onload = function() {
+                    const api = frame.contentWindow.OpenSeadragon;
+                    assert.strictEqual(typeof api, 'function',
+                        mode + ' script exposes window.OpenSeadragon');
+                    assert.strictEqual(typeof (api && api.Point), 'function',
+                        mode + ' script exposes Point');
+                    frame.remove();
+                    loadNext();
+                };
+                script.onerror = function() {
+                    assert.ok(false, mode + ' script failed to load');
+                    frame.remove();
+                    loadNext();
+                };
+                frame.contentDocument.head.appendChild(script);
+            };
+            document.body.appendChild(frame);
+        }
+
+        loadNext();
+    });
+
     // ----------
     QUnit.test('Open', function(assert) {
         const done = assert.async();
@@ -466,15 +531,12 @@
         assert.strictEqual(viewer.isMouseNavEnabled(), true, "Mouse navigation is enabled again.");
     });
 
-    //Version numbers are injected by the build process, so skip version tests if we are only running code coverage
-    if(!window.COVERAGE_RUN){
-        QUnit.test('version object', function(assert) {
-            assert.equal(typeof OpenSeadragon.version.versionStr, "string", "versionStr should be a string");
-            assert.ok(OpenSeadragon.version.major >= 0, "major should be a positive number");
-            assert.ok(OpenSeadragon.version.minor >= 0, "minor should be a positive number");
-            assert.ok(OpenSeadragon.version.revision >= 0, "revision should be a positive number");
-        });
-    }
+    QUnit.test('version object', function(assert) {
+        assert.equal(typeof OpenSeadragon.version.versionStr, "string", "versionStr should be a string");
+        assert.ok(OpenSeadragon.version.major >= 0, "major should be a positive number");
+        assert.ok(OpenSeadragon.version.minor >= 0, "minor should be a positive number");
+        assert.ok(OpenSeadragon.version.revision >= 0, "revision should be a positive number");
+    });
     // Ensures positiveModulo returns a positive result for negative inputs
     QUnit.test('positiveModulo', function(assert) {
         assert.equal(OpenSeadragon.positiveModulo(-1, 5), 4, 'positiveModulo(-1, 5) should be 4');
