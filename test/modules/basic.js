@@ -24,6 +24,71 @@
         }
     });
 
+    // Verify public APIs exposed by the built distribution across toolchain changes.
+    QUnit.test('bundle preserves Point addition and negative modulo', function(assert) {
+        const a = new OpenSeadragon.Point(2, -3);
+        const b = new OpenSeadragon.Point(-5, 7);
+        const sum = a.plus(b);
+
+        assert.deepEqual([sum.x, sum.y], [-3, 4], 'Point components add');
+        assert.strictEqual(OpenSeadragon.positiveModulo(-13, 5), 2,
+            'negative modulo remains nonnegative');
+    });
+
+    QUnit.test('bundle preserves numeric semantic version fields', function(assert) {
+        const version = OpenSeadragon.version;
+        const parts = version.versionStr.split('.').map(Number);
+
+        assert.deepEqual(
+            [version.major, version.minor, version.revision],
+            parts,
+            'built version fields agree with version string'
+        );
+    });
+
+    QUnit.test('built IIFE exposes global with classic and module scripts', function(assert) {
+        const done = assert.async();
+        const modes = ['classic', 'module'];
+        let index = 0;
+
+        function loadNext() {
+            if (index === modes.length) {
+                done();
+                return;
+            }
+
+            const mode = modes[index++];
+            const frame = document.createElement('iframe');
+            frame.style.display = 'none';
+            frame.onload = function() {
+                frame.onload = null;
+                const script = frame.contentDocument.createElement('script');
+                if (mode === 'module') {
+                    script.type = 'module';
+                }
+                script.src = '/build/openseadragon/openseadragon.js';
+                script.onload = function() {
+                    const api = frame.contentWindow.OpenSeadragon;
+                    assert.strictEqual(typeof api, 'function',
+                        mode + ' script exposes window.OpenSeadragon');
+                    assert.strictEqual(typeof (api && api.Point), 'function',
+                        mode + ' script exposes Point');
+                    frame.remove();
+                    loadNext();
+                };
+                script.onerror = function() {
+                    assert.ok(false, mode + ' script failed to load');
+                    frame.remove();
+                    loadNext();
+                };
+                frame.contentDocument.head.appendChild(script);
+            };
+            document.body.appendChild(frame);
+        }
+
+        loadNext();
+    });
+
     // ----------
     QUnit.test('Open', function(assert) {
         const done = assert.async();
