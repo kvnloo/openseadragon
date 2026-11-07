@@ -372,4 +372,138 @@
             }),
         });
     });
+    QUnit.test('Callable viewer headers resolve separately for metadata and tile XHR', function(assert) {
+        const done = assert.async();
+        const originalAjax = OpenSeadragon.makeAjaxRequest;
+        const requests = [];
+        let token = 'metadata';
+
+        viewer.setAjaxHeaders(() => ({ Authorization: 'Bearer ' + token }));
+        // Observe requests without replacing or simulating the real transport.
+        OpenSeadragon.makeAjaxRequest = function(options) {
+            if (OpenSeadragon.isPlainObject(options) && typeof options.url === 'string') {
+                requests.push({
+                    url: options.url,
+                    headers: OpenSeadragon.extend({}, options.headers)
+                });
+            }
+            return originalAjax.apply(this, arguments);
+        };
+
+        let finished = false;
+        function finish() {
+            if (!finished) {
+                finished = true;
+                OpenSeadragon.makeAjaxRequest = originalAjax;
+                done();
+            }
+        }
+
+        viewer.addOnceHandler('open', function() {
+            token = 'tiles';
+        });
+        viewer.addOnceHandler('tile-loaded', function(event) {
+            try {
+                const metadata = requests.find(request => request.url.indexOf('testpattern.dzi') !== -1);
+                const tiles = requests.filter(request => request.url.indexOf('testpattern_files') !== -1);
+                assert.ok(metadata, 'metadata XHR was made');
+                if (metadata) {
+                    assert.strictEqual(metadata.headers.Authorization, 'Bearer metadata',
+                        'metadata XHR uses the first token');
+                }
+                assert.ok(tiles.length > 0, 'tile XHRs were made');
+                tiles.forEach(request => {
+                    assert.strictEqual(request.headers.Authorization, 'Bearer tiles',
+                        'tile XHR uses refreshed token');
+                });
+                assert.strictEqual(event.tile.ajaxHeaders.Authorization, 'Bearer tiles',
+                    'loaded tile retains the headers used for its request');
+            } finally {
+                finish();
+            }
+        });
+        viewer.addOnceHandler('open-failed', function(event) {
+            assert.ok(false, 'metadata failed to open: ' + event.message);
+            finish();
+        });
+        viewer.open('/test/data/testpattern.dzi');
+    });
+
+    QUnit.test('Callable header precedence and token-sensitive cache identities', function(assert) {
+        const done = assert.async();
+        let token = 'first';
+        viewer.setAjaxHeaders(() => ({
+            Authorization: 'Bearer ' + token,
+            'X-Header-Scope': 'viewer'
+        }));
+
+        const source = OpenSeadragon.extend({}, customTileSource, {
+            getTileAjaxHeaders: function(level, x, y) {
+                return {
+                    'X-Header-Scope': 'tile',
+                    Range: getTileRangeHeader(level, x, y)
+                };
+            }
+        });
+        function addImage(expectedToken, callback) {
+            viewer.addTiledImage({
+                tileSource: OpenSeadragon.extend({}, source),
+                ajaxHeaders: () => ({
+                    'X-Header-Scope': 'image',
+                    'X-Image': 'shared'
+                }),
+                success: function(event) {
+                    const tile = event.item._getTile(0, 0, 0, 1, new OpenSeadragon.Point(1, 1));
+                    assert.deepEqual(tile.ajaxHeaders, {
+                        Authorization: 'Bearer ' + expectedToken,
+                        'X-Header-Scope': 'tile',
+                        'X-Image': 'shared',
+                        Range: getTileRangeHeader(0, 0, 0)
+                    }, 'viewer, image and tile headers merge with tile precedence');
+                    callback(tile);
+                },
+                error: function(event) {
+                    assert.ok(false, 'failed to create image: ' + event.message);
+                    done();
+                }
+            });
+        }
+
+        addImage('first', first => {
+            token = 'second';
+            addImage('second', second => {
+                assert.strictEqual(first.getUrl(), second.getUrl(), 'both tiles request the same URL');
+                assert.notStrictEqual(first.cacheKey, second.cacheKey,
+                    'different effective authorization headers produce distinct cache keys');
+                assert.strictEqual(first.ajaxHeaders.Authorization, 'Bearer first',
+                    'rotating a provider does not mutate an existing tile');
+                done();
+            });
+        });
+    });
+
+    QUnit.test('Callable viewer headers respect propagate=false', function(assert) {
+        const done = assert.async();
+        viewer.setAjaxHeaders(() => ({ 'X-Contract': 'old' }));
+        viewer.addTiledImage({
+            tileSource: OpenSeadragon.extend({}, customTileSource),
+            success: function(event) {
+                const image = event.item;
+                assert.strictEqual(image.ajaxHeaders()['X-Contract'], 'old',
+                    'initial provider applies to the tiled image');
+                viewer.setAjaxHeaders(() => ({ 'X-Contract': 'new' }), false);
+                assert.strictEqual(image.ajaxHeaders()['X-Contract'], 'old',
+                    'false propagation keeps the previous provider for the tiled image');
+                viewer.setAjaxHeaders(() => ({ 'X-Contract': 'new' }), true);
+                assert.strictEqual(image.ajaxHeaders()['X-Contract'], 'new',
+                    'true propagation replaces the provider');
+                done();
+            },
+            error: function(event) {
+                assert.ok(false, 'failed to create image: ' + event.message);
+                done();
+            }
+        });
+    });
+
 })();

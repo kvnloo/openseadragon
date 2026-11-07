@@ -791,7 +791,7 @@
   *     Whether to load tile data using AJAX requests.
   *     Note that this can be overridden at the {@link OpenSeadragon.TileSource} level.
   *
-  * @property {Object} [ajaxHeaders={}]
+  * @property {Object|Function} [ajaxHeaders={}]
   *     A set of headers to include when making AJAX requests for tile sources or tiles.
   *
   * @property {Boolean} [splitHashDataForPost=false]
@@ -1061,6 +1061,30 @@ function OpenSeadragon( options ){
         return lastKey === undefined || hasOwn.call( obj, lastKey );
     };
 
+
+    /**
+     * Resolve AJAX header objects or zero-argument providers at the point a request
+     * is prepared. Later sources take precedence, including falsy values that
+     * deliberately remove inherited headers.
+     * @private
+     */
+    $.resolveAjaxHeaders = function(...sources) {
+        const resolved = {};
+        for (let source of sources) {
+            if ($.isFunction(source)) {
+                source = source();
+            }
+            if (source === undefined || source === null) {
+                continue;
+            }
+            if (!$.isPlainObject(source)) {
+                $.console.error('[ajaxHeaders] Ignoring invalid headers, expected a plain object');
+                continue;
+            }
+            $.extend(resolved, source);
+        }
+        return resolved;
+    };
 
     /**
      * Taken from jQuery 1.6.1
