@@ -293,4 +293,491 @@
         v.open([{ isFailTestSource: "1" }, { isFailTestSource: "2" }]);
     });
 
+    QUnit.test('throwing/null internal cache free does not crash or corrupt cache bookkeeping', function (assert) {
+        const throwingFree = () => { throw new TypeError("deleteTexture: parameter 1 is not of type 'WebGLTexture'"); };
+        const rec = new OpenSeadragon.InternalCacheRecord({ texture: {} }, "drawer-unit", throwingFree);
+        let escaped = false;
+        try {
+            rec.destroy();
+        } catch (e) {
+            escaped = true;
+        }
+        assert.notOk(escaped, "InternalCacheRecord.destroy() contains a throwing drawer destructor");
+        assert.notOk(rec.loaded, "record marked unloaded after destroy");
+        assert.equal(rec.data, null, "record data cleared after destroy");
+
+        // null-resolved data never reaches the drawer destructor. A null resolution counts as
+        // 'the drawer declined', matching what a synchronous null return already does (a failed marker
+        // is parked in the slot and the build is retried after a cool-off) rather than parking a
+        // loaded-but-empty record in the slot.
+        let freeCalled = false;
+        const nullRec = new OpenSeadragon.InternalCacheRecord(
+            OpenSeadragon.Promise.resolve(null), "drawer-unit", () => { freeCalled = true; });
+
+        return nullRec.await().then(() => {
+            assert.notOk(nullRec.loaded, "null-backed record is not 'loaded'");
+            assert.ok(nullRec.failed, "null-backed record is marked failed so it gets rebuilt");
+            nullRec.destroy();
+            assert.notOk(freeCalled, "destructor not invoked when internal cache data is null");
+
+            const fakeDrawer = {
+                _dataNeedsRefresh: 0,
+                options: { usePrivateCache: true, preloadCache: false },
+                getId() { return "drawer-unit"; },
+                getSupportedDataFormats() { return [T_A]; },
+                internalCacheCreate() { return { texture: {} }; },
+                internalCacheFree() { throw new TypeError("deleteTexture: parameter 1 is not of type 'WebGLTexture'"); }
+            };
+
+            const fakeTile = { cacheKey: "unit-key" };
+            const cache = new OpenSeadragon.CacheRecord();
+            cache.addTile(fakeTile, 0, T_A);          // loaded, main data present
+            cache.withTileReference(fakeTile);         // _tRef for internalCacheCreate
+            cache.prepareInternalCacheSync(fakeDrawer); // installs internal cache with throwing free
+
+            const tc = new OpenSeadragon.TileCache({ maxImageCacheCount: 200 });
+            const key = "unit-key";
+            cache.cacheKey = key;
+            cache._ownerTileCache = tc;
+            tc._cachesLoaded[key] = cache;
+            tc._cachesLoadedCount++;
+
+            const originalError = OpenSeadragon.console.error;
+            let sawDoesNotBelong = false;
+            OpenSeadragon.console.error = function (msg) {
+                if (typeof msg === "string" && msg.indexOf("does not belong to") !== -1) {
+                    sawDoesNotBelong = true;
+                }
+                // swallow (expected contained-destructor error is logged here too)
+            };
+
+            let unloadThrew = false;
+            try {
+                tc.unloadCacheForTile(fakeTile, key, true, false);
+            } catch (e) {
+                unloadThrew = true;
+            } finally {
+                OpenSeadragon.console.error = originalError;
+            }
+
+            assert.notOk(unloadThrew, "unloadCacheForTile does not rethrow the drawer destructor error");
+            assert.notOk(sawDoesNotBelong, "no 'does not belong to' cascade emitted");
+            assert.equal(tc._cachesLoaded[key], undefined, "cache record removed from _cachesLoaded");
+            assert.equal(tc._cachesLoadedCount, 0, "cache count decremented consistently");
+            assert.notOk(cache.loaded, "cache record fully destroyed");
+        });
+    });
+
+    // Regression: in-place main-data overwrite (setDataAs) must rebuild each drawer's internal
+    // (derived) cache from the new data. Double-buffered so preload/async drawers keep drawing the
+    // old texture until the replacement is loaded (no blink), then free the old one. Previously the
+    // code called a nonexistent InternalCacheRecord.setDataAs and threw.
+    QUnit.test('in-place data overwrite rebuilds internal cache (double-buffered, no blink)', function (assert) {
+        const stubTile = () => ({ cacheKey: "k", tiledImage: { viewer: { forceRedraw() {} } } });
+
+        const syncFreed = [];
+        const syncDrawer = {
+            _dataNeedsRefresh: 0,
+            options: { usePrivateCache: true, preloadCache: false },
+            getId() { return "sync-drawer"; },
+            getSupportedDataFormats() { return [T_A]; },
+            internalCacheCreate(cache) { return { tex: cache.data }; }, // derive from current main data
+            internalCacheFree(data) { syncFreed.push(data); }
+        };
+
+        const syncTile = stubTile();
+        const syncCache = new OpenSeadragon.CacheRecord();
+        syncCache.addTile(syncTile, 10, T_A);
+        syncCache.withTileReference(syncTile);
+        const syncIc1 = syncCache.prepareInternalCacheSync(syncDrawer);
+        assert.deepEqual(syncIc1.data, { tex: 10 }, "internal cache built from initial data");
+
+        syncCache.setDataAs(20, T_A); // in-place overwrite -> _refreshInternalCaches (sync path)
+        const syncIc2 = syncCache._getInternalCacheRef(syncDrawer);
+        assert.notEqual(syncIc2, syncIc1, "new internal record swapped in for sync drawer");
+        assert.deepEqual(syncIc2.data, { tex: 20 }, "internal cache rebuilt from new data");
+        assert.ok(syncFreed.some(d => d && d.tex === 10), "old internal data freed after sync swap");
+
+        const asyncFreed = [];
+        const asyncDrawer = {
+            _dataNeedsRefresh: 0,
+            options: { usePrivateCache: true, preloadCache: true },
+            getId() { return "async-drawer"; },
+            getSupportedDataFormats() { return [T_A]; },
+            internalCacheCreate(cache) {
+                const val = cache.data;
+                return OpenSeadragon.Promise.resolve().then(() => ({ tex: val }));
+            },
+            internalCacheFree(data) { asyncFreed.push(data); }
+        };
+
+        const asyncTile = stubTile();
+        const asyncCache = new OpenSeadragon.CacheRecord();
+        asyncCache.addTile(asyncTile, 1, T_A);
+        asyncCache.withTileReference(asyncTile);
+
+        return asyncCache.prepareInternalCacheAsync(asyncDrawer).then(() => {
+            const ic1 = asyncCache._getInternalCacheRef(asyncDrawer);
+            assert.deepEqual(ic1.data, { tex: 1 }, "async internal cache built from initial data");
+
+            asyncCache.setDataAs(2, T_A); // in-place overwrite -> async rebuild
+
+            const during = asyncCache._getInternalCacheRef(asyncDrawer);
+            assert.equal(during, ic1, "old internal cache kept in slot during async rebuild (no blink)");
+            assert.ok(during.loaded, "old internal cache still loaded during rebuild");
+            assert.deepEqual(during.data, { tex: 1 }, "old data still available during rebuild");
+
+            return sleep(30).then(() => {
+                const after = asyncCache._getInternalCacheRef(asyncDrawer);
+                assert.notEqual(after, ic1, "new internal cache swapped in once loaded");
+                assert.deepEqual(after.data, { tex: 2 }, "new internal cache holds new data");
+                assert.ok(asyncFreed.some(d => d && d.tex === 1), "old async internal data freed after swap");
+            });
+        });
+    });
+
+    // Preloading drawers (usePrivateCache + preloadCache, e.g. the WebGL drawer) build their internal
+    // cache ahead of the drawing loop. If it is missing or was invalidated outside of the invalidation
+    // routine (setInternalCacheNeedsRefresh), getDataForRendering must still hand back drawable data
+    // instead of dropping the tile for an unbounded number of frames.
+    QUnit.test('preloading drawer: getDataForRendering builds a missing/stale internal cache in place', function (assert) {
+        const tile = { cacheKey: "k", tiledImage: { viewer: { forceRedraw() {} } }, _unload() {} };
+        let created = 0;
+        const drawer = {
+            _dataNeedsRefresh: 0,
+            options: { usePrivateCache: true, preloadCache: true },
+            getId() { return "preload-drawer"; },
+            getSupportedDataFormats() { return [T_A]; },
+            internalCacheCreate(cache) { created++; return { tex: cache.data }; },
+            internalCacheFree() {}
+        };
+
+        const cache = new OpenSeadragon.CacheRecord();
+        cache.addTile(tile, 10, T_A);
+        cache.withTileReference(tile);
+
+        // nothing preloaded yet: the drawing loop must not come up empty
+        const first = cache.getDataForRendering(drawer, tile);
+        assert.ok(first, "internal cache built on demand when preloading has not run");
+        assert.deepEqual(first.data, { tex: 10 }, "built from the current main data");
+        assert.equal(created, 1, "internalCacheCreate called exactly once");
+
+        // already prepared: no rebuild
+        assert.strictEqual(cache.getDataForRendering(drawer, tile), first, "prepared internal cache reused");
+        assert.equal(created, 1, "no rebuild while the internal cache is up to date");
+
+        // the drawer invalidates its internal caches (context recreated, smoothing changed, ...)
+        drawer._dataNeedsRefresh = OpenSeadragon.now() + 1;
+        const refreshed = cache.getDataForRendering(drawer, tile);
+        assert.ok(refreshed, "stale internal cache rebuilt rather than skipped");
+        assert.notStrictEqual(refreshed, first, "a new internal cache record is installed");
+        assert.equal(created, 2, "internalCacheCreate called again for the stale record");
+
+        cache.destroy();
+    });
+
+    // ---------------------------------------------------------------------------------------
+    // internalCacheCreate may be synchronous or asynchronous. These guard the contract:
+    // a throw must never reach the drawing loop, a rejection must never poison the slot or
+    // escalate to the main cache, and only the async route may start asynchronous work.
+    // ---------------------------------------------------------------------------------------
+
+    const stubInternalDrawer = (opts) => Object.assign({
+        _dataNeedsRefresh: 0,
+        getId() { return "contract-drawer"; },
+        getSupportedDataFormats() { return [T_A]; },
+        internalCacheFree() {}
+    }, opts);
+
+    const stubTileFor = () => ({ cacheKey: "k", tiledImage: { viewer: { forceRedraw() {} } }, _unload() {} });
+
+    function makeCache(tile, data = 10) {
+        const cache = new OpenSeadragon.CacheRecord();
+        cache.addTile(tile, data, T_A);
+        cache.withTileReference(tile);
+        return cache;
+    }
+
+    QUnit.test('internalCacheCreate: a synchronous throw never escapes the drawing loop', function (assert) {
+        for (const preloadCache of [false, true]) {
+            let created = 0, fail = true;
+            const drawer = stubInternalDrawer({
+                options: { usePrivateCache: true, preloadCache: preloadCache },
+                internalCacheCreate() {
+                    created++;
+                    if (fail) { throw new Error("Injected internalCacheCreate failure"); }
+                    return { tex: 1 };
+                }
+            });
+            const tile = stubTileFor();
+            const cache = makeCache(tile);
+
+            let escaped = false, result = "unset";
+            try {
+                result = cache.getDataForRendering(drawer, tile);
+            } catch (e) {
+                escaped = true;
+            }
+            assert.notOk(escaped, "preloadCache=" + preloadCache + ": the throw is contained");
+            assert.strictEqual(result, undefined, "preloadCache=" + preloadCache + ": tile is skipped this frame");
+
+            // a failed marker occupies the slot: a drawer that throws deterministically must not be
+            // re-invoked on every single frame
+            const marker = cache._getInternalCacheRef(drawer);
+            assert.ok(marker, "preloadCache=" + preloadCache + ": a failed marker is stored");
+            assert.ok(marker.failed, "preloadCache=" + preloadCache + ": the marker is marked failed");
+            assert.notOk(marker.loaded, "preloadCache=" + preloadCache + ": the marker is not drawable");
+
+            fail = false;
+            for (let i = 0; i < 5; i++) {
+                assert.strictEqual(cache.getDataForRendering(drawer, tile), undefined,
+                    "preloadCache=" + preloadCache + ": tile stays skipped during the cool-off");
+            }
+            assert.equal(created, 1, "preloadCache=" + preloadCache + ": no rebuild while the marker cools off");
+
+            // age the marker deterministically rather than sleeping out the real interval
+            marker.tstamp -= 60000;
+            const second = cache.getDataForRendering(drawer, tile);
+            assert.equal(created, 2, "preloadCache=" + preloadCache + ": the build is retried once the cool-off elapsed");
+            assert.deepEqual(second && second.data, { tex: 1 }, "preloadCache=" + preloadCache + ": recovers once the drawer stops throwing");
+
+            cache.destroy();
+        }
+    });
+
+    QUnit.test('internalCacheCreate: a rejected build settles cleanly instead of poisoning the record', function (assert) {
+        const drawer = stubInternalDrawer({
+            options: { usePrivateCache: true, preloadCache: true },
+            internalCacheCreate() {
+                return OpenSeadragon.Promise.reject(new Error("Injected async internalCacheCreate failure"));
+            }
+        });
+        const tile = stubTileFor();
+        const cache = makeCache(tile);
+
+        return withGlobalErrorCapture(() => {
+            assert.strictEqual(cache.getDataForRendering(drawer, tile), undefined, "tile skipped while the build is in flight");
+            const record = cache._getInternalCacheRef(drawer);
+            assert.ok(record, "the in-flight record occupies the slot");
+
+            let rejected = false;
+            return record.await().catch(() => { rejected = true; }).then(() => {
+                assert.notOk(rejected, "await() resolves rather than rejecting");
+                assert.ok(record.failed, "the record is marked failed");
+                assert.notOk(record.loaded, "the record never becomes loaded");
+                cache.destroy();
+            });
+        }).then(({ state }) => {
+            assert.equal(state.unhandledRejections, 0, 'No unhandled promise rejections');
+            assert.equal(state.errors, 0, 'No uncaught errors');
+        });
+    });
+
+    QUnit.test('internalCacheCreate: an async failure does not destroy the main cache or kill the tile', function (assert) {
+        const drawer = stubInternalDrawer({
+            options: { usePrivateCache: true, preloadCache: true },
+            getRequiredDataFormats() { return [T_A]; },
+            internalCacheCreate() {
+                return OpenSeadragon.Promise.reject(new Error("Injected async internalCacheCreate failure"));
+            }
+        });
+        const tile = stubTileFor();
+        tile.exists = true;
+        const cache = makeCache(tile);
+
+        let brokenReported = 0;
+        cache.cacheKey = "contract-key";
+        cache._ownerTileCache = { _handleBrokenCacheRecord() { brokenReported++; } };
+
+        return withGlobalErrorCapture(() => cache.prepareForRendering(drawer).then(() => {
+            assert.notOk(cache._destroyed, "main cache survives a drawer-side failure");
+            assert.ok(cache.loaded, "main data is still loaded");
+            assert.equal(cache.data, 10, "main data is untouched");
+            assert.notStrictEqual(tile.exists, false, "the tile is not marked missing");
+            assert.equal(brokenReported, 0, "the failure is not escalated to the TileCache");
+        })).then(({ state }) => {
+            assert.equal(state.unhandledRejections, 0, 'No unhandled promise rejections');
+            cache._ownerTileCache = null;
+            cache.destroy();
+        });
+    });
+
+    QUnit.test('internalCacheCreate: a failed build is retried, but only after a cool-off', function (assert) {
+        let created = 0, fail = true;
+        const drawer = stubInternalDrawer({
+            options: { usePrivateCache: true, preloadCache: true },
+            internalCacheCreate() {
+                created++;
+                return fail ? OpenSeadragon.Promise.reject(new Error("Injected failure")) :
+                    OpenSeadragon.Promise.resolve({ tex: 1 });
+            }
+        });
+        const tile = stubTileFor();
+        const cache = makeCache(tile);
+
+        return withGlobalErrorCapture(() => {
+            cache.getDataForRendering(drawer, tile);
+            const failedRecord = cache._getInternalCacheRef(drawer);
+
+            return failedRecord.await().then(() => {
+                // a deterministically failing drawer must not be re-invoked on every frame
+                for (let i = 0; i < 5; i++) {
+                    assert.strictEqual(cache.getDataForRendering(drawer, tile), undefined, "tile stays skipped during the cool-off");
+                }
+                assert.equal(created, 1, "no rebuild while the failed record is still cooling off");
+
+                // age the record deterministically rather than sleeping out the real interval
+                fail = false;
+                failedRecord.tstamp -= 60000;
+                assert.strictEqual(cache.getDataForRendering(drawer, tile), undefined, "async rebuild is not drawable in the same frame");
+                assert.equal(created, 2, "the build is retried once the cool-off has elapsed");
+
+                return cache._getInternalCacheRef(drawer).await().then(() => {
+                    const good = cache.getDataForRendering(drawer, tile);
+                    assert.deepEqual(good && good.data, { tex: 1 }, "the tile recovers once the drawer succeeds");
+                    cache.destroy();
+                });
+            });
+        }).then(({ state }) => {
+            assert.equal(state.unhandledRejections, 0, 'No unhandled promise rejections');
+        });
+    });
+
+    // A drawer may decline to build (return null/undefined) without throwing - the WebGL drawer does
+    // exactly that while its GL context is lost. Nothing is drawable then either, so the build must be
+    // throttled just like a failed one, yet must heal at once when the drawer says it is ready again.
+    QUnit.test('internalCacheCreate: a declining drawer is not re-invoked on every frame', function (assert) {
+        for (const preloadCache of [false, true]) {
+            let created = 0, decline = true;
+            const drawer = stubInternalDrawer({
+                options: { usePrivateCache: true, preloadCache: preloadCache },
+                internalCacheCreate() {
+                    created++;
+                    return decline ? null : { tex: 1 };
+                }
+            });
+            const tile = stubTileFor();
+            const cache = makeCache(tile);
+
+            for (let i = 0; i < 5; i++) {
+                assert.strictEqual(cache.getDataForRendering(drawer, tile), undefined,
+                    "preloadCache=" + preloadCache + ": nothing drawable while the drawer declines");
+            }
+            assert.equal(created, 1, "preloadCache=" + preloadCache + ": the declined build is not retried every frame");
+
+            const marker = cache._getInternalCacheRef(drawer);
+            assert.ok(marker && marker.failed, "preloadCache=" + preloadCache + ": a failed marker holds the slot");
+            assert.notOk(marker.loaded, "preloadCache=" + preloadCache + ": the marker is not drawable");
+            assert.strictEqual(marker.data, undefined, "preloadCache=" + preloadCache + ": the marker holds no data");
+
+            // the drawer announces it is ready again (context recovered, ...): no cool-off wait
+            decline = false;
+            drawer._dataNeedsRefresh = OpenSeadragon.now() + 1;
+            const recovered = cache.getDataForRendering(drawer, tile);
+            assert.equal(created, 2, "preloadCache=" + preloadCache + ": setInternalCacheNeedsRefresh retries at once");
+            assert.deepEqual(recovered && recovered.data, { tex: 1 },
+                "preloadCache=" + preloadCache + ": the tile recovers once the drawer stops declining");
+
+            cache.destroy();
+        }
+    });
+
+    // The same, without an explicit refresh signal: the marker must go stale on its own.
+    QUnit.test('internalCacheCreate: a declined build is retried after the cool-off', function (assert) {
+        let created = 0, decline = true;
+        const drawer = stubInternalDrawer({
+            options: { usePrivateCache: true, preloadCache: false },
+            internalCacheCreate() {
+                created++;
+                return decline ? undefined : { tex: 2 };
+            }
+        });
+        const tile = stubTileFor();
+        const cache = makeCache(tile);
+
+        assert.strictEqual(cache.getDataForRendering(drawer, tile), undefined, "nothing drawable while declined");
+        const marker = cache._getInternalCacheRef(drawer);
+        assert.ok(marker && marker.failed, "a failed marker holds the slot");
+
+        decline = false;
+        marker.tstamp -= 60000; // age it rather than sleeping out the real interval
+        const good = cache.getDataForRendering(drawer, tile);
+        assert.equal(created, 2, "the build is retried once the cool-off has elapsed");
+        assert.deepEqual(good && good.data, { tex: 2 }, "the tile recovers");
+
+        cache.destroy();
+    });
+
+    QUnit.test('internalCacheCreate: a failed refresh keeps the previous working record', function (assert) {
+        let fail = false;
+        const freed = [];
+        const drawer = stubInternalDrawer({
+            options: { usePrivateCache: true, preloadCache: true },
+            internalCacheCreate(cache) {
+                const val = cache.data;
+                return fail ? OpenSeadragon.Promise.reject(new Error("Injected refresh failure")) :
+                    OpenSeadragon.Promise.resolve({ tex: val });
+            },
+            internalCacheFree(data) { freed.push(data); }
+        });
+        const tile = stubTileFor();
+        const cache = makeCache(tile, 1);
+
+        return withGlobalErrorCapture(() => cache.prepareInternalCacheAsync(drawer).then(() => {
+            const original = cache._getInternalCacheRef(drawer);
+            assert.deepEqual(original.data, { tex: 1 }, "internal cache built from the initial data");
+
+            fail = true;
+            cache.setDataAs(2, T_A); // in-place overwrite -> _refreshInternalCaches
+
+            return sleep(30).then(() => {
+                assert.strictEqual(cache._getInternalCacheRef(drawer), original, "the working record is kept when the refresh fails");
+                assert.deepEqual(original.data, { tex: 1 }, "its data is still usable");
+                assert.notOk(freed.some(d => d && d.tex === 1), "the still-referenced data was not freed");
+                cache.destroy();
+            });
+        })).then(({ state }) => {
+            assert.equal(state.unhandledRejections, 0, 'No unhandled promise rejections');
+        });
+    });
+
+    QUnit.test('internalCacheCreate: a foreign thenable is adopted, not stored as data', function (assert) {
+        const drawer = stubInternalDrawer({
+            options: { usePrivateCache: true, preloadCache: true },
+            // deliberately not a native Promise nor an OpenSeadragon.Promise
+            internalCacheCreate() {
+                return { then(resolve) { setTimeout(() => resolve({ tex: 7 }), 0); } };
+            }
+        });
+        const tile = stubTileFor();
+        const cache = makeCache(tile);
+
+        assert.strictEqual(cache.getDataForRendering(drawer, tile), undefined, "not drawable while the thenable is pending");
+        const record = cache._getInternalCacheRef(drawer);
+
+        return record.await().then(() => {
+            assert.ok(record.loaded, "the thenable was adopted and the record loaded");
+            assert.deepEqual(record.data, { tex: 7 }, "the resolved value is stored, not the thenable itself");
+            cache.destroy();
+        });
+    });
+
+    QUnit.test('internalCacheCreate: the drawing loop never starts an async build for a sync drawer', function (assert) {
+        let created = 0;
+        const drawer = stubInternalDrawer({
+            options: { usePrivateCache: true, preloadCache: false },
+            internalCacheCreate() { created++; return { tex: 1 }; }
+        });
+        const tile = stubTileFor();
+        const cache = makeCache(tile);
+
+        const first = cache.getDataForRendering(drawer, tile);
+        assert.deepEqual(first && first.data, { tex: 1 }, "a synchronous creator is drawable in the same frame");
+        assert.equal(created, 1, "built exactly once");
+        assert.strictEqual(cache.getDataForRendering(drawer, tile), first, "the record is reused");
+        assert.equal(created, 1, "no rebuild while up to date");
+
+        cache.destroy();
+    });
+
 })();

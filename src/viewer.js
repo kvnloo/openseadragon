@@ -218,7 +218,9 @@ $.Viewer = function( options ) {
 
         //UI image resources
         //TODO: rename navImages to uiImages
-        navImages:      null,
+        navImages:      options.showNavigationControl === false && options.showSequenceControl === false ?
+            null :
+            makeNavImages( $.extend( {}, $.DEFAULT_SETTINGS.buttonColors, options.buttonColors ) ),
 
         //interface button controls
         buttonGroup:        null,
@@ -294,17 +296,18 @@ $.Viewer = function( options ) {
         _this._showMessage( msg );
     });
 
+    // Cooperative gesture handling is suspended in full-page/fullscreen, so re-apply the touch-action
+    // and tracker config whenever full-page mode changes.
+    this.addHandler( 'full-page', function () {
+        _this._updateCooperativeGestureHandling();
+    });
+
     $.ControlDock.call( this, options );
 
     //Deal with tile sources
     if (this.xmlPath) {
         //Deprecated option.  Now it is preferred to use the tileSources option
         this.tileSources = [ this.xmlPath ];
-    }
-
-    if (!this.httpClient) {
-        //todo pass it args like the headers etc
-        this.httpClient = new $.DefaultHttpClient();
     }
 
     this.element              = this.element || document.getElementById( this.id );
@@ -332,7 +335,8 @@ $.Viewer = function( options ) {
         style.top      = "0px";
         style.left     = "0px";
     }(this.canvas.style));
-    $.setElementTouchActionNone( this.canvas );
+    // touch-action on the canvas (and container below) is applied by
+    // _updateCooperativeGestureHandling() once the inner tracker exists.
     if (options.tabIndex !== "") {
         this.canvas.tabIndex = (options.tabIndex === undefined ? 0 : options.tabIndex);
     }
@@ -348,7 +352,6 @@ $.Viewer = function( options ) {
         style.top       = "0px";
         style.textAlign = "left";  // needed to protect against
     }( this.container.style ));
-    $.setElementTouchActionNone( this.container );
 
     this.container.insertBefore( this.canvas, this.container.firstChild );
     this.element.appendChild( this.container );
@@ -363,6 +366,7 @@ $.Viewer = function( options ) {
     this.innerTracker = new $.MouseTracker({
         userData:                 'Viewer.innerTracker',
         element:                  this.canvas,
+        cooperativeGestureHandling: this._isCooperative,
         startDisabled:            !this.mouseNavEnabled,
         clickTimeThreshold:       this.clickTimeThreshold,
         clickDistThreshold:       this.clickDistThreshold,
@@ -388,6 +392,10 @@ $.Viewer = function( options ) {
         blurHandler:              $.delegate( this, onCanvasBlur ),
     });
 
+    // Apply the initial cooperative gesture config (canvas/container touch-action + inner tracker)
+    // now that the tracker exists. Single source of truth, also used on full-page change and toggle.
+    this._updateCooperativeGestureHandling();
+
     this.outerTracker = new $.MouseTracker({
         userData:              'Viewer.outerTracker',
         element:               this.container,
@@ -400,7 +408,7 @@ $.Viewer = function( options ) {
         leaveHandler:          $.delegate( this, onContainerLeave )
     });
 
-    if( this.toolbar ){
+    if ( this.toolbar ){
         this.toolbar = new $.ControlDock({ element: this.toolbar });
     }
 
@@ -408,9 +416,9 @@ $.Viewer = function( options ) {
 
     THIS[ this.hash ].prevContainerSize = _getSafeElemSize( this.container );
 
-    if(window.ResizeObserver){
+    if (window.ResizeObserver) {
         this._autoResizePolling = false;
-        this._resizeObserver = new ResizeObserver(function(){
+        this._resizeObserver = new ResizeObserver(function() {
             THIS[_this.hash].needsResize = true;
         });
 
@@ -626,11 +634,20 @@ $.Viewer = function( options ) {
             displayRegionColor: this.navigatorDisplayRegionColor,
             crossOriginPolicy: this.crossOriginPolicy,
             animationTime:     this.animationTime,
-            drawer:            this.drawer.getType(),
+            drawer:            this.navigatorDrawer || options.drawer,
             drawerOptions:     this.drawerOptions,
             loadTilesWithAjax: this.loadTilesWithAjax,
             ajaxHeaders:       this.ajaxHeaders,
             ajaxWithCredentials: this.ajaxWithCredentials,
+        });
+
+        this.navigator.addOnceHandler('drawer-error', (event) => {
+            $.console.warn(
+                'OpenSeadragon navigator drawer error: ' + event.error +
+                ' If tiles are cross-origin, set crossOriginPolicy: "Anonymous" or ' +
+                '"use-credentials" (requires CORS headers on the tile server), or set ' +
+                'navigatorDrawer: "canvas" to use canvas explicitly.'
+            );
         });
     }
 
@@ -853,6 +870,7 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
                      * @property {OpenSeadragon.Viewer} eventSource - A reference to the Viewer which raised the event.
                      * @property {String} message - Information about what failed.
                      * @property {String} source - The tile source that failed.
+                     * @property {?Number} status - HTTP status code, if available.
                      * @property {?Object} userData - Arbitrary subscriber-defined object.
                      */
                     _this.raiseEvent( 'open-failed', failEvent );
@@ -970,7 +988,8 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
 
         this.world.removeAll();
         this.tileCache.clear();
-        this.imageLoader.clear();
+        // Teardown: also cancel tiles waiting out tileRetryDelay, their world is going away.
+        this.imageLoader.clear(true);
         /**
          * Raised when the viewer is closed (see {@link OpenSeadragon.Viewer#close}).
          *
@@ -1067,6 +1086,11 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
             this.paging.destroy();
         }
 
+        // Tear down the cooperative gesture hint overlay
+        // (the element is removed with the container below)
+        clearTimeout( this._cooperativeOverlayTimeout );
+        this.cooperativeOverlay = null;
+
         // Remove both the canvas and container elements added by OpenSeadragon
         // This will also remove its children (like the canvas)
         if (this.container && this.container.parentNode === this.element) {
@@ -1161,7 +1185,7 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
         let supported = false;
         if (Drawer) {
             try {
-                supported = Drawer.isSupported();
+                supported = Drawer.isSupported(drawerOptions || this.drawerOptions[drawerCandidate]);
             } catch (e) {
                 $.console.warn('Error in %s isSupported(); treating this drawer as unsupported:', drawerCandidate, e && e.message ? e.message : e);
             }
@@ -1169,7 +1193,7 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
         if (supported) {
             // if the drawer is supported, create it and return it.
             // first destroy the previous drawer
-            if(oldDrawer && mainDrawer){
+            if (oldDrawer && mainDrawer){
                 oldDrawer.destroy();
             }
 
@@ -1200,7 +1224,7 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
      * @returns {Boolean}
      */
     isMouseNavEnabled: function () {
-        return this.innerTracker.tracking;
+        return this.innerTracker.isTracking();
     },
 
     /**
@@ -1279,6 +1303,7 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
      * @param {Boolean} true to show, false to hide.
      * @returns {OpenSeadragon.Viewer} Chainable.
      * @fires OpenSeadragon.Viewer.event:controls-enabled
+     * @fires OpenSeadragon.Viewer.event:controls-fade
      */
     setControlsEnabled: function( enabled ) {
         if( enabled ){
@@ -1314,6 +1339,53 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
 
         this.debugMode = debugMode;
         this.forceRedraw();
+    },
+
+    /**
+     * Changes the colors of the default button images, eg to follow a page's light/dark theme.
+     * Buttons whose images were set through navImages keep them.
+     *
+     * @function
+     * @param {Object} colors
+     * @param {String} [colors.background]
+     * @param {String} [colors.icon]
+     * @returns {OpenSeadragon.Viewer} Chainable.
+     */
+    setButtonColors: function( colors ) {
+        const oldImages = makeNavImages( this.buttonColors );
+        this.buttonColors = $.extend( {}, this.buttonColors, colors );
+        const newImages = makeNavImages( this.buttonColors );
+        const buttons = {
+            zoomIn:      this.zoomInButton,
+            zoomOut:     this.zoomOutButton,
+            home:        this.homeButton,
+            fullpage:    this.fullPageButton,
+            rotateleft:  this.rotateLeftButton,
+            rotateright: this.rotateRightButton,
+            flip:        this.flipButton,
+            previous:    this.previousButton,
+            next:        this.nextButton
+        };
+
+        Object.keys( buttons ).forEach( name => {
+            const images = this.navImages && this.navImages[ name ];
+            if ( !images ) {
+                return;
+            }
+            const button = buttons[ name ];
+            [ "REST", "GROUP", "HOVER", "DOWN" ].forEach( state => {
+                if ( images[ state ] !== oldImages[ name ][ state ] ) {
+                    return;
+                }
+                images[ state ] = newImages[ name ][ state ];
+                const suffix = state.charAt( 0 ) + state.slice( 1 ).toLowerCase();
+                if ( button && button[ "img" + suffix ] ) {
+                    button[ "src" + suffix ] = images[ state ];
+                    button[ "img" + suffix ].src = images[ state ];
+                }
+            } );
+        } );
+        return this;
     },
 
     /**
@@ -1784,12 +1856,12 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
      * @property {Boolean} [options.zombieCache] In the case that this method removes any TiledImage instance,
      *      allow the item-referenced cache to remain in memory even without active tiles. Default false.
      * @property {Number} [options.degrees=0] Initial rotation of the tiled image around
-     * its top left corner in degrees.
+     * its center in degrees.
      * @property {Boolean} [options.flipped=false] Whether to horizontally flip the image.
      * @property {String} [options.compositeOperation] How the image is composited onto other images.
      * @property {String} [options.crossOriginPolicy] The crossOriginPolicy for this specific image,
      * overriding viewer.crossOriginPolicy.
-     * @property {Boolean} [options.ajaxWithCredentials] deprecated
+     * @property {Boolean} [options.ajaxWithCredentials] Whether to set withCredentials on tile AJAX
      * @property {Boolean} [options.loadTilesWithAjax]
      *      Whether to load tile data using AJAX requests.
      *      Defaults to the setting in {@link OpenSeadragon.Options}.
@@ -2019,6 +2091,7 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
                 blendTime: this.blendTime,
                 alwaysBlend: this.alwaysBlend,
                 minPixelRatio: this.minPixelRatio,
+                discardLevelsBelowDownsampleRatio: this.discardLevelsBelowDownsampleRatio,
                 smoothTileEdgesMinZoom: this.smoothTileEdgesMinZoom,
                 iOSDevice: this.iOSDevice,
                 crossOriginPolicy: options.crossOriginPolicy,
@@ -2113,7 +2186,8 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
                     tileSource.addHandler('open-failed', function (event) {
                         reject({
                             message: event.message,
-                            source: originalTileSource
+                            source: originalTileSource,
+                            status: event.status,
                         });
                     });
                 }
@@ -2425,6 +2499,11 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
                     onFocus:    onFocusHandler,
                     onBlur:     onBlurHandler
                 }));
+
+                const updateZoomButtonsHandler = $.delegate( this, this._updateZoomButtons );
+                this.addHandler( 'open', updateZoomButtonsHandler );
+                this.addHandler( 'reset-size', updateZoomButtonsHandler );
+                this.addHandler( 'viewport-change', updateZoomButtonsHandler );
             }
 
             if ( this.showHomeControl ) {
@@ -2821,6 +2900,22 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
       },
 
     /**
+     * Disables each zoom button while the target zoom is at that button's limit.
+     * @function OpenSeadragon.Viewer.prototype._updateZoomButtons
+     * @private
+     */
+    _updateZoomButtons: function() {
+        if ( !this.viewport ) {
+            return;
+        }
+        const zoom = this.viewport.getZoom();
+        const maxZoom = this.viewport.getMaxZoom();
+        const minZoom = this.viewport.getMinZoom();
+        setButtonAtZoomLimit( this, this.zoomInButton, zoom >= maxZoom || isAtZoomLimit( zoom, maxZoom ) );
+        setButtonAtZoomLimit( this, this.zoomOutButton, zoom <= minZoom || isAtZoomLimit( zoom, minZoom ) );
+    },
+
+    /**
      * Display a message in the viewport
      * @function OpenSeadragon.Viewer.prototype._showMessage
      * @private
@@ -2869,6 +2964,129 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
             default:
                 return this.gestureSettingsUnknown;
         }
+    },
+
+    // Whether cooperative gesture handling currently applies.
+    // Single source of truth for the gesture guards so the condition stays consistent across handlers.
+    // Suspended in full-page/fullscreen, where there's no surrounding page to scroll past.
+    get _isCooperative() {
+        return this.cooperativeGestures && !this.isFullPage();
+    },
+
+    /**
+     * Enable or disable cooperative gesture handling at runtime.
+     * @function
+     * @param {Boolean} enabled
+     * @returns {OpenSeadragon.Viewer} Chainable.
+     */
+    setCooperativeGestures: function ( enabled ) {
+        this.cooperativeGestures = !!enabled;
+        this._updateCooperativeGestureHandling();
+        return this;
+    },
+
+    // Single source of truth for applying cooperative gesture config from the current state.
+    // Used during construction, on full-page change, and on runtime toggle.
+    // When active, `pan-x pan-y` lets the browser scroll the page on a one-finger touch,
+    // while two-finger gestures fall through to OSD; otherwise the viewer captures all touches (`none`).
+    // The container is an ancestor of the canvas and touch-action is intersected up the ancestor chain, so both must be set.
+    _updateCooperativeGestureHandling: function () {
+        const active = this._isCooperative;
+        const touchAction = active ? 'pan-x pan-y' : 'none';
+        $.setElementTouchAction( this.canvas, touchAction );
+        $.setElementTouchAction( this.container, touchAction );
+        this.innerTracker.setCooperativeGestureHandling( active );
+    },
+
+    // private
+    _raiseCooperativeGestureEvent: function( gesture, event ) {
+        let message;
+        if ( gesture === 'scroll' ) {
+            const modifier = /Mac/i.test( navigator.platform || navigator.userAgent || '' ) ? '⌘' : 'Ctrl';
+            message = $.getString( 'GestureHints.Scroll', modifier );
+        } else {
+            message = $.getString( 'GestureHints.Touch' );
+        }
+
+        const cooperativeGestureArgs = {
+            eventSource:          this,
+            tracker:              event.eventSource,
+            pointerType:          event.pointerType,
+            gesture:              gesture,
+            position:             event.position,
+            message:              message,
+            originalEvent:        event.originalEvent,
+            preventDefaultAction: false
+        };
+
+        /**
+         * Raised when a gesture is blocked by cooperative gesture handling.
+         *
+         * @event canvas-cooperative-gesture
+         * @memberof OpenSeadragon.Viewer
+         * @type {object}
+         * @property {OpenSeadragon.Viewer} eventSource - A reference to the Viewer which raised this event.
+         * @property {OpenSeadragon.MouseTracker} tracker - A reference to the MouseTracker which originated this event.
+         * @property {String} pointerType - "mouse", "touch", "pen", etc.
+         * @property {String} gesture - The blocked gesture: "drag" (one-finger touch) or "scroll" (mouse wheel).
+         * @property {OpenSeadragon.Point} position - The position of the event relative to the tracked element.
+         * @property {String} message - The default hint text; change this to customise the built-in hint.
+         * @property {Object} originalEvent - The original DOM event.
+         * @property {Boolean} preventDefaultAction - Set to true to suppress the built-in hint. Default: false.
+         * @property {?Object} userData - Arbitrary subscriber-defined object.
+         */
+        this.raiseEvent( 'canvas-cooperative-gesture', cooperativeGestureArgs );
+
+        // Return args to allow modifying message and behaviour
+        return cooperativeGestureArgs;
+    },
+
+    /**
+     * Shows the cooperative gesture hint overlay with the given text, fading it back out after a
+     * short delay.
+     *
+     * The overlay is added as a sibling of the canvas with pointer-events:none, so it never
+     * interferes with the gesture it's hinting about.
+     * @function OpenSeadragon.Viewer.prototype._showCooperativeMessage
+     * @private
+     * @param {String} hintText - The hint text to display. Defaults to i18n UI strings, but users can hook into this.
+     */
+    _showCooperativeMessage: function ( hintText ) {
+        if ( !this.cooperativeOverlay ) {
+
+            this.cooperativeOverlay = $.makeNeutralElement( "div" );
+
+            // Hook for custom styles
+            this.cooperativeOverlay.className = "openseadragon-cooperative-overlay";
+
+            this.cooperativeOverlay.setAttribute( "aria-hidden", "true" );
+
+            const overlayStyle = this.cooperativeOverlay.style;
+            overlayStyle.position = "absolute";
+            overlayStyle.top = overlayStyle.left = overlayStyle.right = overlayStyle.bottom = "0";
+            overlayStyle.display = "grid";
+            overlayStyle.placeItems = "center";
+            overlayStyle.textAlign = "center";
+            overlayStyle.padding = "24px";
+            overlayStyle.color = "#fff";
+            overlayStyle.background = "rgba(0, 0, 0, 0.5)";
+            // Allow pass-thru on all pointer events
+            overlayStyle.pointerEvents = "none";
+            overlayStyle.opacity = "0";
+            overlayStyle.transition = "opacity 0.3s ease";
+
+            this.cooperativeOverlay.appendChild( $.makeNeutralElement( "div" ) );
+            this.container.appendChild( this.cooperativeOverlay );
+        }
+
+        this.cooperativeOverlay.firstChild.textContent = hintText;
+        this.cooperativeOverlay.style.opacity = "1";
+
+        // Reset fade-out timer
+        clearTimeout( this._cooperativeOverlayTimeout );
+        this._cooperativeOverlayTimeout = setTimeout( () => {
+            this.cooperativeOverlay.style.opacity = "0";
+        }, 1500 );
     },
 
     // private
@@ -3084,7 +3302,7 @@ function getOverlayObject( viewer, overlay ) {
         return overlay;
     }
 
-    let element = null;
+    let element;
     if ( overlay.element ) {
         element = $.getElement( overlay.element );
     } else {
@@ -3171,16 +3389,16 @@ function scheduleUpdate( viewer, updateFunc ){
 
 
 //provides a sequence in the fade animation
-function scheduleControlsFade( viewer ) {
+function scheduleControlsFade( viewer, fadeId ) {
     $.requestAnimationFrame( function(){
-        updateControlsFade( viewer );
+        updateControlsFade( viewer, fadeId );
     });
 }
 
 
 //initiates an animation to hide the controls
 function beginControlsAutoHide( viewer ) {
-    if ( !viewer.autoHideControls ) {
+    if ( !viewer.autoHideControls || viewer.controlsShouldFade ) {
         return;
     }
     viewer.controlsShouldFade = true;
@@ -3188,15 +3406,18 @@ function beginControlsAutoHide( viewer ) {
         $.now() +
         viewer.controlsFadeDelay;
 
+    // An abort followed by a new begin can leave the previous timer or frame
+    // loop pending; the id lets it see it has been superseded.
+    const fadeId = viewer._controlsFadeId = ( viewer._controlsFadeId || 0 ) + 1;
     window.setTimeout( function(){
-        scheduleControlsFade( viewer );
+        scheduleControlsFade( viewer, fadeId );
     }, viewer.controlsFadeDelay );
 }
 
 
 //determines if fade animation is done or continues the animation
-function updateControlsFade( viewer ) {
-    if ( viewer.controlsShouldFade ) {
+function updateControlsFade( viewer, fadeId ) {
+    if ( viewer.controlsShouldFade && fadeId === viewer._controlsFadeId ) {
         let currentTime = $.now();
         let deltaTime = currentTime - viewer.controlsFadeBeginTime;
         let opacity = 1.0 - deltaTime / viewer.controlsFadeLength;
@@ -3210,9 +3431,24 @@ function updateControlsFade( viewer ) {
             }
         }
 
+        /**
+         * Raised on each step of the controls fade animation, and with an opacity
+         * of 1 when the controls are shown again. Use it to fade custom controls
+         * in step with the built-in ones.
+         *
+         * @event controls-fade
+         * @memberof OpenSeadragon.Viewer
+         * @type {object}
+         * @property {OpenSeadragon.Viewer} eventSource - A reference to the Viewer which raised the event.
+         * @property {Number} opacity - The opacity applied to the controls, from 0 to 1.
+         * @property {?Object} userData - Arbitrary subscriber-defined object.
+         */
+        viewer._controlsOpacity = opacity;
+        viewer.raiseEvent( 'controls-fade', { opacity: opacity } );
+
         if ( opacity > 0 ) {
             // fade again
-            scheduleControlsFade( viewer );
+            scheduleControlsFade( viewer, fadeId );
         }
     }
 }
@@ -3223,6 +3459,12 @@ function abortControlsAutoHide( viewer ) {
     viewer.controlsShouldFade = false;
     for ( let i = viewer.controls.length - 1; i >= 0; i-- ) {
         viewer.controls[ i ].setOpacity( 1.0 );
+    }
+    // Tracked on the viewer rather than read from the controls: custom buttons
+    // are not in viewer.controls, so there may be none to ask.
+    if ( viewer._controlsOpacity < 1 ) {
+        viewer._controlsOpacity = 1;
+        viewer.raiseEvent( 'controls-fade', { opacity: 1.0 } );
     }
 }
 
@@ -3236,8 +3478,10 @@ function onFocus(){
 }
 
 function onBlur(){
-    beginControlsAutoHide( this );
-
+    // Clicking from a focused button to the canvas blurs it with the pointer still inside.
+    if ( !THIS[ this.hash ].mouseInside ) {
+        beginControlsAutoHide( this );
+    }
 }
 
 function onCanvasContextMenu( event ) {
@@ -3305,10 +3549,10 @@ function getActiveActionFromKey(code, shift) {
 /**
  * Handles the keyup event on the viewer's canvas element.
  *
- * @private
  * For the released key, marks both the shifted and non-shifted navigation actions as inactive in the _activeActions object.
  * If either action is released before reaching the minimum frame threshold, sets that action as "virtually held" in _navActionVirtuallyHeld,
  * ensuring smooth completion of the minimum pan or zoom distance regardless of modifier key release order.
+ * @private
  */
 function onCanvasKeyUp(event) {
 
@@ -3577,13 +3821,18 @@ function onCanvasDrag( event ) {
 
     gestureSettings = this.gestureSettingsByDeviceType( event.pointerType );
 
+    // In cooperative gesture mode a one-finger touch drag should scroll the surrounding
+    // page rather than pan the image, so we skip the pan for single touches. Two-finger
+    // gestures are routed to the pinch handler and are left untouched.
+    const cooperativeTouchDrag = this._isCooperative && event.pointerType === 'touch';
+
     if(!canvasDragEventArgs.preventDefaultAction && this.viewport){
 
         if (gestureSettings.dblClickDragToZoom && THIS[ this.hash ].draggingToZoom){
             const factor = Math.pow( this.zoomPerDblClickDrag, event.delta.y / 50);
             this.viewport.zoomBy(factor);
         }
-        else if (gestureSettings.dragToPan && !THIS[ this.hash ].draggingToZoom) {
+        else if (gestureSettings.dragToPan && !THIS[ this.hash ].draggingToZoom && !cooperativeTouchDrag) {
             if( !this.panHorizontal ){
                 event.delta.x = 0;
             }
@@ -3614,6 +3863,19 @@ function onCanvasDrag( event ) {
                 }
             }
             this.viewport.panBy( this.viewport.deltaPointsFromPixels( event.delta.negate() ), gestureSettings.flickEnabled && !this.constrainDuringPan);
+        }
+
+        // The one-finger pan was suppressed in cooperative mode; notify the app once per gesture
+        // (not on every move). The flag is reset at the start of the next gesture in onCanvasPress.
+        if ( cooperativeTouchDrag && gestureSettings.dragToPan && !THIS[ this.hash ].draggingToZoom &&
+                !THIS[ this.hash ].cooperativeGestureActive ) {
+            THIS[ this.hash ].cooperativeGestureActive = true;
+
+            // Raise the event to allow the app to modify the message or suppress it entirely
+            const cooperativeArgs = this._raiseCooperativeGestureEvent( 'drag', event );
+            if ( !cooperativeArgs.preventDefaultAction ) {
+                this._showCooperativeMessage( cooperativeArgs.message );
+            }
         }
 
     }
@@ -3654,11 +3916,15 @@ function onCanvasDragEnd( event ) {
 
     gestureSettings = this.gestureSettingsByDeviceType( event.pointerType );
 
+    // Match onCanvasDrag: in cooperative mode a one-finger touch shouldn't fling the image.
+    const cooperativeTouchDrag = this._isCooperative && event.pointerType === 'touch';
+
     if (!canvasDragEndEventArgs.preventDefaultAction && this.viewport) {
         if ( !THIS[ this.hash ].draggingToZoom &&
             gestureSettings.dragToPan &&
             gestureSettings.flickEnabled &&
-            event.speed >= gestureSettings.flickMinSpeed) {
+            event.speed >= gestureSettings.flickMinSpeed &&
+            !cooperativeTouchDrag) {
             let amplitudeX = 0;
             if (this.panHorizontal) {
                 amplitudeX = gestureSettings.flickMomentum * event.speed *
@@ -3682,7 +3948,6 @@ function onCanvasDragEnd( event ) {
     if( gestureSettings.dblClickDragToZoom && THIS[ this.hash ].draggingToZoom === true ){
         THIS[ this.hash ].draggingToZoom = false;
     }
-
 
 }
 
@@ -3758,8 +4023,6 @@ function onCanvasPress( event ) {
      * @property {OpenSeadragon.MouseTracker} tracker - A reference to the MouseTracker which originated this event.
      * @property {String} pointerType - "mouse", "touch", "pen", etc.
      * @property {OpenSeadragon.Point} position - The position of the event relative to the tracked element.
-     * @property {Boolean} insideElementPressed - True if the left mouse button is currently being pressed and was initiated inside the tracked element, otherwise false.
-     * @property {Boolean} insideElementReleased - True if the cursor still inside the tracked element when the button was released.
      * @property {Object} originalEvent - The original DOM event.
      * @property {?Object} userData - Arbitrary subscriber-defined object.
      */
@@ -3767,11 +4030,13 @@ function onCanvasPress( event ) {
         tracker: event.eventSource,
         pointerType: event.pointerType,
         position: event.position,
-        insideElementPressed: event.insideElementPressed,
-        insideElementReleased: event.insideElementReleased,
         originalEvent: event.originalEvent
     });
 
+    // Reset the once-per-gesture cooperative hint guard at the start of each gesture, so it shows
+    // again next time regardless of how the previous gesture ended (a one-finger drag handing off to
+    // a page scroll ends via pointer cancel, which fires neither drag-end nor release).
+    THIS[ this.hash ].cooperativeGestureActive = false;
 
     const gestureSettings = this.gestureSettingsByDeviceType( event.pointerType );
     if ( gestureSettings.dblClickDragToZoom ){
@@ -4000,6 +4265,12 @@ function onCanvasScroll( event ) {
     let gestureSettings;
     let factor;
 
+    // cooperativeGestures:
+    // Mouse wheel zooms only while Ctrl/Cmd is held; without a modifier we let the browser scroll the page past the viewer instead
+    const allowPageScroll = this._isCooperative &&
+    !event.originalEvent.ctrlKey &&
+    !event.originalEvent.metaKey;
+
     /* Certain scroll devices fire the scroll event way too fast so we are injecting a simple adjustment to keep things
      * partially normalized. If we have already fired an event within the last 'minScrollDelta' milliseconds we skip
      * this one and wait for the next event. */
@@ -4015,7 +4286,7 @@ function onCanvasScroll( event ) {
             shift: event.shift,
             originalEvent: event.originalEvent,
             preventDefaultAction: false,
-            preventDefault: true
+            preventDefault: !allowPageScroll
         };
 
         /**
@@ -4031,7 +4302,7 @@ function onCanvasScroll( event ) {
          * @property {Boolean} shift - True if the shift key was pressed during this event.
          * @property {Object} originalEvent - The original DOM event.
          * @property {Boolean} preventDefaultAction - Set to true to prevent default scroll to zoom behaviour. Default: false.
-         * @property {Boolean} preventDefault - Set to true to prevent the default user-agent's handling of the wheel event. Default: true.
+         * @property {Boolean} preventDefault - Set to true to prevent the default user-agent's handling of the wheel event. Default: true (false in cooperative mode when no Ctrl/Cmd modifier is held, so the page can scroll).
          * @property {?Object} userData - Arbitrary subscriber-defined object.
          */
          this.raiseEvent('canvas-scroll', canvasScrollEventArgs );
@@ -4043,18 +4314,26 @@ function onCanvasScroll( event ) {
 
             gestureSettings = this.gestureSettingsByDeviceType( event.pointerType );
             if ( gestureSettings.scrollToZoom ) {
-                factor = Math.pow( this.zoomPerScroll, event.scroll );
-                this.viewport.zoomBy(
-                    factor,
-                    gestureSettings.zoomToRefPoint ? this.viewport.pointFromPixel( event.position, true ) : null
-                );
-                this.viewport.applyConstraints();
+                if ( allowPageScroll ) {
+                    // Raise the event to allow the app to modify the message or suppress it entirely
+                    const cooperativeArgs = this._raiseCooperativeGestureEvent( 'scroll', event );
+                    if ( !cooperativeArgs.preventDefaultAction ) {
+                        this._showCooperativeMessage( cooperativeArgs.message );
+                    }
+                } else {
+                    factor = Math.pow( this.zoomPerScroll, event.scroll );
+                    this.viewport.zoomBy(
+                        factor,
+                        gestureSettings.zoomToRefPoint ? this.viewport.pointFromPixel( event.position, true ) : null
+                    );
+                    this.viewport.applyConstraints();
+                }
             }
         }
 
         event.preventDefault = canvasScrollEventArgs.preventDefault;
     } else {
-        event.preventDefault = true;
+        event.preventDefault = !allowPageScroll;
     }
 }
 
@@ -4142,7 +4421,7 @@ function updateMulti( viewer ) {
     }
 }
 
-function doViewerResize(viewer, containerSize){
+function doViewerResize(viewer, containerSize) {
     const viewport = viewer.viewport;
     const zoom = viewport.getZoom();
     const center = viewport.getCenter();
@@ -4166,13 +4445,19 @@ function doViewerResize(viewer, containerSize){
 
 function handleNavKeys(viewer) {
     // Iterate over all navigation actions.
+    let anyDown = false;
     for (const action in viewer._activeActions) {
         if (viewer._activeActions[action] || viewer._navActionVirtuallyHeld[action]) {
             viewer._navActionFrames[action]++;
             if (viewer._navActionFrames[action] >= viewer._minNavActionFrames) {
                 viewer._navActionVirtuallyHeld[action] = false;
             }
+            anyDown = anyDown || viewer._activeActions[action] || viewer._navActionVirtuallyHeld[action];
         }
+    }
+    // This runs every frame for every viewer, so skip the allocations below when idle.
+    if (!anyDown) {
+        return;
     }
 
     // Helper for action state
@@ -4235,26 +4520,25 @@ function updateOnce( viewer ) {
     }
 
     let viewerWasResized = false;
-    if (viewer.autoResize || THIS[viewer.hash].forceResize){
+    if (viewer.autoResize || THIS[viewer.hash].forceResize) {
         let containerSize;
-        if(viewer._autoResizePolling){
+        if (viewer._autoResizePolling) {
             containerSize = _getSafeElemSize(viewer.container);
             const prevContainerSize = THIS[viewer.hash].prevContainerSize;
             if (!containerSize.equals(prevContainerSize)) {
                 THIS[viewer.hash].needsResize = true;
             }
         }
-        if(THIS[viewer.hash].needsResize){
+        if (THIS[viewer.hash].needsResize) {
             doViewerResize(viewer, containerSize || _getSafeElemSize(viewer.container));
             viewerWasResized = true;
         }
-
     }
-
-
 
     const viewportChange = viewer.viewport.update() || viewerWasResized;
     let animated = viewer.world.update(viewportChange) || viewportChange;
+    // Whether the set of wanted tiles could have moved, so that queued jobs might be stale.
+    const tileSelectionChanged = viewer.world.tileSelectionChanged() || viewportChange;
 
     if (viewportChange) {
         /**
@@ -4297,7 +4581,7 @@ function updateOnce( viewer ) {
     }
 
     if ( animated || isAnimationFinished || THIS[ viewer.hash ].forceRedraw || viewer.world.needsDraw() ) {
-        drawWorld( viewer );
+        drawWorld( viewer, tileSelectionChanged );
         viewer._drawOverlays();
         if( viewer.navigator ){
           viewer.navigator.update( viewer.viewport );
@@ -4342,8 +4626,14 @@ function updateOnce( viewer ) {
     //viewer.profiler.endUpdate();
 }
 
-function drawWorld( viewer ) {
-    viewer.imageLoader.clear();
+function drawWorld( viewer, tileSelectionChanged ) {
+    // Queued jobs are tiles that were selected for the view as it was when they were queued, so they only
+    // go stale when that view changes - the viewport moved, an item's own transform did, or an item dropped
+    // its tiles via reset(). Clearing unconditionally aborts jobs that are still wanted, and they can then
+    // only be re-selected at the per-frame rate, which starves the loader whenever imageLoaderLimit is set.
+    if ( tileSelectionChanged ) {
+        viewer.imageLoader.clear();
+    }
     viewer.world.draw();
 
     /**
@@ -4362,7 +4652,77 @@ function drawWorld( viewer ) {
 // Navigation Controls
 ///////////////////////////////////////////////////////////////////////////////
 function resolveUrl( prefix, url ) {
-    return prefix ? prefix + url : url;
+    return prefix && !url.startsWith( "data:" ) ? prefix + url : url;
+}
+
+
+// Icon paths on a 24x24 grid, drawn as strokes.
+const ROTATE_ICON = '<path d="M12 6A6.5 6.5 0 1 1 5.5 12.5"/><path d="M14.5 3.5 12 6l2.5 2.5"/>';
+const ARROW_ICON = '<path d="M18 12H6"/><path d="M11 7l-5 5 5 5"/>';
+const MIRROR = '<g transform="matrix(-1 0 0 1 24 0)">';
+const NAV_ICONS = {
+    zoomIn:      '<path d="M12 6.5v11M6.5 12h11"/>',
+    zoomOut:     '<path d="M6.5 12h11"/>',
+    home:        '<path d="M4.5 11.5 12 5l7.5 6.5"/><path d="M7 10v9h4v-5h2v5h4v-9"/>',
+    fullpage:    '<path d="M5 9.5V5h4.5M14.5 5H19v4.5M19 14.5V19h-4.5M9.5 19H5v-4.5"/>',
+    rotateleft:  ROTATE_ICON,
+    rotateright: MIRROR + ROTATE_ICON + '</g>',
+    flip:        '<path d="M12 4v16" stroke-dasharray="2 2.5"/><path d="M9 7.5 4 17h5z"/><path d="M15 7.5 20 17h-5z"/>',
+    previous:    ARROW_ICON,
+    next:        MIRROR + ARROW_ICON + '</g>'
+};
+
+const navImagesCache = {};
+
+// Builds the default button images as SVG data URLs, cached per color pair.
+// The result is shared, so callers must not mutate it; the Viewer options merge deep-copies it.
+function makeNavImages( colors ) {
+    const bg = colors.background;
+    const fg = colors.icon;
+    const key = bg + "|" + fg;
+    if ( navImagesCache[ key ] ) {
+        return navImagesCache[ key ];
+    }
+    const states = {
+        REST:  { fill: bg, fillOpacity: 0.6, ring: fg, ringOpacity: 0.2, icon: fg, shade: 0 },
+        GROUP: { fill: bg, fillOpacity: 0.8, ring: fg, ringOpacity: 0.3, icon: fg, shade: 0 },
+        HOVER: { fill: fg, fillOpacity: 0.92, ring: bg, ringOpacity: 0.35, icon: bg, shade: 0 },
+        DOWN:  { fill: fg, fillOpacity: 1, ring: bg, ringOpacity: 0.35, icon: bg, shade: 0.12 }
+    };
+    const navImages = {};
+    Object.keys( NAV_ICONS ).forEach( name => {
+        navImages[ name ] = {};
+        Object.keys( states ).forEach( state => {
+            const s = states[ state ];
+            const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="35" height="34" viewBox="0 0 35 34">` +
+                `<circle cx="17.5" cy="17" r="15.5" fill="${s.fill}" fill-opacity="${s.fillOpacity}" stroke="${s.ring}" stroke-opacity="${s.ringOpacity}"/>` +
+                `<circle cx="17.5" cy="17" r="15.5" fill="${bg}" fill-opacity="${s.shade}"/>` +
+                `<g transform="translate(5.5 5)" fill="none" stroke="${s.icon}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${NAV_ICONS[ name ]}</g>` +
+                `</svg>`;
+            navImages[ name ][ state ] = "data:image/svg+xml," + encodeURIComponent( svg );
+        } );
+    } );
+    navImagesCache[ key ] = navImages;
+    return navImages;
+}
+
+
+// Constrained zooms recompute zoom from bounds width, so they can stop one ULP (unit in the last place) short of the limit.
+function isAtZoomLimit( zoom, limit ) {
+    return Math.abs( zoom / limit - 1 ) < 1e-8;
+}
+
+
+function setButtonAtZoomLimit( viewer, button, atZoomLimit ) {
+    // Without the zoom control, zoomInButton/zoomOutButton keep the raw id or element from the options.
+    if ( !( button instanceof $.Button ) ) {
+        return;
+    }
+    if ( atZoomLimit && !button.isDisabled() ) {
+        // A disabled button ignores pointer release, so a press-and-hold zoom would never end.
+        viewer.endZoomAction();
+    }
+    button._setAtZoomLimit( atZoomLimit );
 }
 
 

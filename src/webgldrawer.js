@@ -37,6 +37,11 @@
 
     const OpenSeadragon = $; // alias for JSDoc
 
+    // Placeholder transform for batch slots that have no drawable tile: collapses the quad to a
+    // point so nothing is rasterized. Needed because the batch arrays are reused across frames and
+    // would otherwise hand a stale (or undefined) matrix to the shader.
+    const ZERO_MATRIX = new Float32Array(9);
+
     /**
      * @class WebglContextManager
      * @classdesc Handles the webgl context, isolating it from the rest of the DrawerBase API.
@@ -81,6 +86,8 @@
             }
 
             if (this._gl) {
+                // MAX_TEXTURE_IMAGE_UNITS cached
+                this._glNumTextures = this._gl.getParameter(this._gl.MAX_TEXTURE_IMAGE_UNITS) || 0;
                 this._gl.pixelStorei(this._gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, this._unpackWithPremultipliedAlpha);
             }
         }
@@ -103,13 +110,15 @@
 
         /**
          * Get the maximum number of texture units
-         * @returns {Number} MAX_TEXTURE_IMAGE_UNITS value
+         * @returns {Number} MAX_TEXTURE_IMAGE_UNITS value, 0 once the context is lost
          */
         getMaxTextures() {
-            if (!this._gl) {
+            // The cached value outlives the context: without this check a lost context keeps reporting
+            // a valid count, draws silently produce nothing and recovery is never triggered.
+            if (!this._gl || this._gl.isContextLost()) {
                 return 0;
             }
-            return this._gl.getParameter(this._gl.MAX_TEXTURE_IMAGE_UNITS);
+            return this._glNumTextures;
         }
 
         /**
@@ -190,19 +199,50 @@
         }
 
         /**
-         * Apply anisotropic filtering to the currently bound texture if available
+         * Apply anisotropic filtering to the currently bound texture if available. Always writes the
+         * parameter, never skips: the render target is created once and updated in place, so leaving a
+         * previous value behind would keep averaging samples under minification with smoothing off,
+         * which is exactly what NEAREST is asked to avoid.
          * @private
          */
         _applyAnisotropy() {
-            if (!this._imageSmoothingEnabled || !this._extTextureFilterAnisotropic || this._maxAnisotropy <= 0) {
+            if (!this._extTextureFilterAnisotropic || !(this._maxAnisotropy > 0)) {
                 return;
             }
             const gl = this._gl;
             gl.texParameterf(
                 gl.TEXTURE_2D,
                 this._extTextureFilterAnisotropic.TEXTURE_MAX_ANISOTROPY_EXT,
-                Math.min(4, this._maxAnisotropy)
+                this._imageSmoothingEnabled ? Math.min(4, this._maxAnisotropy) : 1
             );
+        }
+
+        /**
+         * Apply the current filter to the texture the caller has already bound, magnification included.
+         * Tile textures and the render-to-texture target must agree, since the second rendering pass
+         * samples the target rather than the tiles.
+         * @private
+         */
+        _applyTextureFilter() {
+            const gl = this._gl;
+            const filter = this.getTextureFilter();
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+            this._applyAnisotropy();
+        }
+
+        /**
+         * Same, for the paths that do not already have the render target bound.
+         * @private
+         */
+        _applyRenderTargetFilter() {
+            const gl = this._gl;
+            if (!gl || !this._renderToTexture) {
+                return;
+            }
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, this._renderToTexture);
+            this._applyTextureFilter();
         }
 
         /**
@@ -228,8 +268,7 @@
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, this._renderToTexture);
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, this.getTextureFilter());
-            this._applyAnisotropy();
+            this._applyTextureFilter();
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
@@ -267,8 +306,7 @@
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, this._renderToTexture);
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, this.getTextureFilter());
-            this._applyAnisotropy();
+            this._applyTextureFilter();
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
@@ -295,9 +333,9 @@
             gl.bindTexture(gl.TEXTURE_2D, texture);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, this.getTextureFilter());
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, this.getTextureFilter());
-            this._applyAnisotropy();
+            // The texture is bound right above, so this is the params-only variant - and it runs for
+            // every tile, which is why the filter is read once rather than twice.
+            this._applyTextureFilter();
 
             try {
                 const unpackPremultipliedAlpha = options.unpackWithPremultipliedAlpha !== undefined ?
@@ -327,7 +365,16 @@
          * @param {Boolean} enabled - Whether image smoothing is enabled
          */
         setImageSmoothingEnabled(enabled) {
-            this._imageSmoothingEnabled = !!enabled;
+            enabled = !!enabled;
+            if (this._imageSmoothingEnabled === enabled) {
+                // Nothing to do, and the render target already carries this filter: never touch GL state
+                // for a setting that did not change, however often this is called.
+                return;
+            }
+            this._imageSmoothingEnabled = enabled;
+            // Tile textures are rebuilt by the caller, but the render target is created once at setup time,
+            // before the viewer gets to pass the option in, so its filter has to be updated in place.
+            this._applyRenderTargetFilter();
         }
 
         /**
@@ -364,7 +411,7 @@
          * @private
          */
         _makeFirstPassShaderProgram() {
-            const numTextures = this._glNumTextures = this._gl.getParameter(this._gl.MAX_TEXTURE_IMAGE_UNITS);
+            const numTextures = this._glNumTextures;
             const makeMatrixUniforms = () => {
                 return [...Array(numTextures).keys()].map(index => `uniform mat3 u_matrix_${index};`).join('\n');
             };
@@ -535,7 +582,7 @@
             if (gl) {
                 try {
                     // adapted from https://stackoverflow.com/a/23606581/1214731
-                    const numTextureUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
+                    const numTextureUnits = this._glNumTextures;
                     if (numTextureUnits && numTextureUnits > 0) {
                         for (let unit = 0; unit < numTextureUnits; ++unit) {
                             gl.activeTexture(gl.TEXTURE0 + unit);
@@ -568,6 +615,7 @@
 
             // Clean up references
             this._gl = null;
+            this._glNumTextures = 0;
             this._firstPass = null;
             this._secondPass = null;
             this._glFrameBuffer = null;
@@ -645,6 +693,14 @@
             this._clippingContext = null;
             this._renderingCanvas = null;
             this._backupCanvasDrawer = null;
+
+            // Per-batch scratch buffers, allocated once per context in _allocateBatchBuffers()
+            // and reused for every tiled image of every frame.
+            this._batchTexturePosition = null;
+            this._batchTextures = null;
+            this._batchMatrices = null;
+            this._batchOpacities = null;
+
             this._canvasFallbackAllowed = this.viewer.drawerCandidates && this.viewer.drawerCandidates.includes('canvas');
 
             this._imageSmoothingEnabled = true; // will be updated by setImageSmoothingEnabled
@@ -660,7 +716,11 @@
             this._setupCanvases();
             this._setupRenderer();
 
-            this._supportedFormats = ["context2d", "image"];
+            // ImageBitmap is texImage2D-uploadable directly and is the only format that can be decoded off the
+            // main thread, so prefer it where the browser has it.
+            this._supportedFormats = typeof createImageBitmap === 'function' ?
+                ["context2d", "image", "imageBitmap"] :
+                ["context2d", "image"];
             this.context = this._outputContext; // API required by tests
         }
 
@@ -668,7 +728,12 @@
             return {
                 // use detached cache: our type conversion will not collide (and does not have to preserve CPU data ref)
                 usePrivateCache: true,
-                preloadCache: false,
+                // Upload textures during the tile invalidation routine instead of the drawing loop.
+                // texImage2D of an <img>/ImageBitmap is a main-thread operation (it can force the deferred
+                // image decode); doing it just in time stalled exactly the frames on which new tiles arrive.
+                // If preloading has not caught up, getDataForRendering() still falls back to a synchronous
+                // build, so no frame is ever dropped waiting for a texture.
+                preloadCache: true,
                 unpackWithPremultipliedAlpha: false,
             };
         }
@@ -711,6 +776,8 @@
             this._renderingCanvas = null;
             this._clippingCanvas = this._clippingContext = null;
             this._outputCanvas = this._outputContext = null;
+            this._batchTexturePosition = this._batchTextures = null;
+            this._batchMatrices = this._batchOpacities = null;
 
             if(this._backupCanvasDrawer){
                 this._backupCanvasDrawer.destroy();
@@ -742,9 +809,10 @@
          * Functional test: true if WebGL is supported and the real first-pass shader pipeline
          * can render (same shaders/context path used at runtime). Uses a temp context and
          * WebglContextManager, draws known non-black pixels to an FBO, then readPixels.
+         * @param {Object} options - Options for this drawer.
          * @returns {Boolean} true if WebGL is supported and the pipeline renders successfully
          */
-        static isSupported(){
+        static isSupported(options){
             let contextManager = null;
             let testTexture = null;
             let gl = null;
@@ -912,6 +980,8 @@
         _getBackupCanvasDrawer(){
             if(!this._backupCanvasDrawer){
                 this._backupCanvasDrawer = this.viewer.requestDrawer('canvas', {mainDrawer: false});
+                // Only the main drawer is handed the viewer option, so pass it on to the fallback as well.
+                this._backupCanvasDrawer.setImageSmoothingEnabled(this._imageSmoothingEnabled);
                 this._backupCanvasDrawer.canvas.style.setProperty('visibility', 'hidden');
                 this._backupCanvasDrawer.getSupportedDataFormats = () => this._supportedFormats;
                 this._backupCanvasDrawer.getDataToDraw = this.getDataToDraw.bind(this);
@@ -936,6 +1006,17 @@
             const secondPass = this._glContext.getSecondPass();
             const glFrameBuffer = this._glContext.getFrameBuffer();
             const renderToTexture = this._glContext.getRenderToTexture();
+            // Check MAX_TEXTURE_IMAGE_UNITS - throw error if invalid (will be caught by the caller's try-catch).
+            const maxTextures = this._glContext.getMaxTextures();
+            if(maxTextures <= 0 || maxTextures === null || maxTextures === undefined){
+                // For example, when viewers were created and not destroyed in the test suite, this error
+                // occurred in the TravisCI tests, though it did not happen when testing locally either in
+                // a browser or on the command line via grunt test.
+                throw new Error(`WebGL error: bad value for gl parameter MAX_TEXTURE_IMAGE_UNITS (${maxTextures}). This could happen
+                if too many contexts have been created and not released, or there is another problem with the graphics card.`);
+            }
+            this._allocateBatchBuffers();
+
             const bounds = this.viewport.getBoundsNoRotateWithMargins(true);
             const view = {
                 bounds: bounds,
@@ -1041,23 +1122,11 @@
                     overallMatrix = viewMatrix.multiply(localMatrix);
                 }
 
-                // Check MAX_TEXTURE_IMAGE_UNITS - throw error if invalid (will be caught by outer try-catch)
-                const maxTextures = this._glContext.getMaxTextures();
-                if(maxTextures <= 0 || maxTextures === null || maxTextures === undefined){
-                    // This can apparently happen on some systems if too many WebGL contexts have been created
-                    // in which case maxTextures can be null, leading to out of bounds errors with the array.
-                    // For example, when viewers were created and not destroyed in the test suite, this error
-                    // occurred in the TravisCI tests, though it did not happen when testing locally either in
-                    // a browser or on the command line via grunt test.
-
-                    throw new Error(`WebGL error: bad value for gl parameter MAX_TEXTURE_IMAGE_UNITS (${maxTextures}). This could happen
-                    if too many contexts have been created and not released, or there is another problem with the graphics card.`);
-                }
-
-                const texturePositionArray = new Float32Array(maxTextures * 12); // 6 vertices (2 triangles) x 2 coordinates per vertex
-                const textureDataArray = new Array(maxTextures);
-                const matrixArray = new Array(maxTextures);
-                const opacityArray = new Array(maxTextures);
+                // reused across frames and tiled images, see _allocateBatchBuffers()
+                const texturePositionArray = this._batchTexturePosition;
+                const textureDataArray = this._batchTextures;
+                const matrixArray = this._batchMatrices;
+                const opacityArray = this._batchOpacities;
 
                 // iterate over tiles and add data for each one to the buffers
                 for(let tileIndex = 0; tileIndex < tilesToDraw.length; tileIndex++){
@@ -1068,12 +1137,15 @@
 
                     if (textureInfo && textureInfo.texture) {
                         this._getTileData(tile, tiledImage, textureInfo, overallMatrix, indexInDrawArray, texturePositionArray, textureDataArray, matrixArray, opacityArray);
+                    } else {
+                        // The texture info is not available, so we cannot draw this tile. This is either because
+                        // the tile data is still being processed, or the data was not correct - in that case,
+                        // internalCacheCreate(..) already logged an error. The slot still takes part in the
+                        // draw call, so blank it out: the buffers are reused and would hold the previous frame.
+                        textureDataArray[indexInDrawArray] = null;
+                        matrixArray[indexInDrawArray] = ZERO_MATRIX;
+                        opacityArray[indexInDrawArray] = 0;
                     }
-                    // else {
-                    //   If the texture info is not available, we cannot draw this tile. This is either because
-                    //   the tile data is still being processed, or the data was not correct - in that case,
-                    //   internalCacheCreate(..) already logged an error.
-                    // }
 
                     if( (numTilesToDraw === maxTextures) || (tileIndex === tilesToDraw.length - 1)){
                         // We've filled up the buffers: time to draw this set of tiles
@@ -1089,11 +1161,12 @@
                         gl.bufferData(gl.ARRAY_BUFFER, texturePositionArray, gl.DYNAMIC_DRAW);
 
                         // set the transform matrix uniform for each tile
-                        matrixArray.forEach( (matrix, index) => {
-                            gl.uniformMatrix3fv(firstPass.uTransformMatrices[index], false, matrix);
-                        });
-                        // set the opacity uniform for each tile
-                        gl.uniform1fv(firstPass.uOpacities, new Float32Array(opacityArray));
+                        for (let i = 0; i < numTilesToDraw; i++) {
+                            gl.uniformMatrix3fv(firstPass.uTransformMatrices[i], false, matrixArray[i]);
+                        }
+                        // set the opacity uniform for each tile; slots beyond numTilesToDraw are never
+                        // sampled, since only 6 * numTilesToDraw vertices are drawn
+                        gl.uniform1fv(firstPass.uOpacities, opacityArray);
 
                         // bind vertex buffers and (re)set attributes before calling gl.drawArrays()
                         gl.bindBuffer(gl.ARRAY_BUFFER, firstPass.bufferOutputPosition);
@@ -1217,16 +1290,38 @@
         // Public API required by all Drawer implementations
         /**
         * Sets whether image smoothing is enabled or disabled
-        * @param {Boolean} enabled If true, uses gl.LINEAR as the TEXTURE_MIN_FILTER and TEXTURE_MAX_FILTER, otherwise gl.NEAREST.
+        * @param {Boolean} enabled If true, uses gl.LINEAR as the TEXTURE_MIN_FILTER and TEXTURE_MAG_FILTER,
+        *   otherwise gl.NEAREST. Applies to the tile textures, to the render-to-texture target sampled by
+        *   the second rendering pass, to the 2d contexts used for compositing, and to the fallback drawer.
         */
         setImageSmoothingEnabled(enabled){
+            enabled = !!enabled;
             if( this._imageSmoothingEnabled !== enabled ){
                 this._imageSmoothingEnabled = enabled;
                 if (this._glContext) {
                     this._glContext.setImageSmoothingEnabled(enabled);
                 }
+                this._applyOutputSmoothing();
+                if (this._backupCanvasDrawer) {
+                    this._backupCanvasDrawer.setImageSmoothingEnabled(enabled);
+                }
                 this.setInternalCacheNeedsRefresh();
                 this.viewer.forceRedraw();
+            }
+        }
+
+        /**
+         * Mirror the smoothing setting onto the 2d contexts this drawer composites through, so that they
+         * behave like the CanvasDrawer contexts do.
+         * @private
+         */
+        _applyOutputSmoothing(){
+            const contexts = [this._outputContext, this._clippingContext];
+            for (const context of contexts) {
+                if (context) {
+                    context.msImageSmoothingEnabled = this._imageSmoothingEnabled;
+                    context.imageSmoothingEnabled = this._imageSmoothingEnabled;
+                }
             }
         }
 
@@ -1353,6 +1448,23 @@
                 return;
             }
             this._glContext.setupRenderer(this._renderingCanvas.width, this._renderingCanvas.height);
+            this._allocateBatchBuffers();
+        }
+
+        /**
+         * (Re)allocate the scratch buffers used to stage one batch of tiles. Sized by the context's
+         * texture unit count, which only changes when the context is recreated.
+         * @private
+         */
+        _allocateBatchBuffers(){
+            const maxTextures = this._glContext ? this._glContext.getMaxTextures() : 0;
+            if (maxTextures <= 0 || (this._batchTextures && this._batchTextures.length === maxTextures)) {
+                return;
+            }
+            this._batchTexturePosition = new Float32Array(maxTextures * 12); // 6 vertices (2 triangles) x 2 coordinates per vertex
+            this._batchTextures = new Array(maxTextures).fill(null);
+            this._batchMatrices = new Array(maxTextures).fill(ZERO_MATRIX);
+            this._batchOpacities = new Float32Array(maxTextures);
         }
 
 
@@ -1377,6 +1489,7 @@
             this._clippingContext = this._clippingCanvas.getContext('2d');
             this._renderingCanvas.width = this._clippingCanvas.width = this._outputCanvas.width;
             this._renderingCanvas.height = this._clippingCanvas.height = this._outputCanvas.height;
+            this._applyOutputSmoothing();
 
             // Create WebGL context manager
             this._glContext = new WebglContextManager({
@@ -1404,6 +1517,8 @@
                 _this._renderingCanvas.style.height = _this._outputCanvas.clientHeight + 'px';
                 _this._renderingCanvas.width = _this._clippingCanvas.width = _this._outputCanvas.width;
                 _this._renderingCanvas.height = _this._clippingCanvas.height = _this._outputCanvas.height;
+                // resizing a canvas resets its 2d context state, smoothing included
+                _this._applyOutputSmoothing();
 
                 // important - update the size of the rendering viewport!
                 _this._resizeRenderer();
@@ -1458,6 +1573,10 @@
                     this._glContext.destroy();
                     this._glContext = null;
                 }
+
+                // Drop the batch scratch buffers: they may still hold texture references belonging
+                // to the destroyed context. _setupRenderer() below allocates fresh ones.
+                this._batchTextures = null;
 
                 // Note: destroyInternalCache() above already properly cleaned up all texture
                 // and glContext references via internalCacheFree() callbacks
@@ -1581,14 +1700,19 @@
             const gl = this._glContext ? this._glContext.getContext() : null;
             if (!gl) {
                 $.console.error('WebGL context not available in internalCacheCreate');
-                return {};
+                // Returning null means no usable record is stored, so the texture is retried once
+                // a context exists again, instead of caching an empty record the tile can never
+                // recover from. The cache parks a failed marker to throttle the retry to once per
+                // second; context recovery calls setInternalCacheNeedsRefresh(), which outdates the
+                // marker right away, so healing is not delayed by that cool-off.
+                return null;
             }
             let texture;
             let position;
 
             let data = cache.data;
             let isCanvas = false;
-            if (data instanceof CanvasRenderingContext2D) {
+            if (data instanceof CanvasRenderingContext2D || data instanceof OffscreenCanvasRenderingContext2D) {
                 data = data.canvas;
                 isCanvas = true;
             }
@@ -1651,7 +1775,8 @@
                     }
                 }
             }
-            if (data instanceof Image) {
+            if (data instanceof Image ||
+                (typeof ImageBitmap !== 'undefined' && data instanceof ImageBitmap)) {
                 const canvas = document.createElement( 'canvas' );
                 canvas.width = data.width;
                 canvas.height = data.height;
@@ -1659,7 +1784,7 @@
                 context.drawImage( data, 0, 0 );
                 data = context;
             }
-            if (data instanceof CanvasRenderingContext2D) {
+            if (data instanceof CanvasRenderingContext2D || data instanceof OffscreenCanvasRenderingContext2D ) {
                 return data;
             }
             $.console.error("Unsupported data used for WebGL Drawer - probably a bug!");

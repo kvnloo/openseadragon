@@ -59,6 +59,11 @@ const I18N = {
         RotateLeft:     "Rotate left",
         RotateRight:    "Rotate right",
         Flip:           "Flip Horizontally"
+    },
+
+    GestureHints: {
+        Touch:          "Use two fingers to pan the image",
+        Scroll:         "Use {0} + scroll to zoom the image"
     }
 };
 
@@ -71,7 +76,7 @@ $.extend( $, /** @lends OpenSeadragon */{
     getString: function( prop ) {
 
         const props   = prop.split('.');
-        let string  = null;
+        let string;
         const args    = arguments;
         let container = I18N;
         let i;

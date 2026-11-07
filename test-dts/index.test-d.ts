@@ -9,6 +9,12 @@ expectError(OpenSeadragon({ id: 123 }));
 expectType<boolean>(viewer.isOpen());
 expectType<boolean>(viewer.isFullPage());
 expectType<OpenSeadragon.Viewer>(viewer.close());
+expectType<OpenSeadragon.Viewer>(OpenSeadragon({ id: "viewer", cooperativeGestures: true }));
+expectType<OpenSeadragon.Viewer>(viewer.setCooperativeGestures(true));
+expectType<OpenSeadragon.Viewer>(OpenSeadragon({ id: "viewer", buttonColors: { icon: "#000" } }));
+expectType<OpenSeadragon.Viewer>(viewer.setButtonColors({ background: "#fff" }));
+expectError(viewer.setButtonColors({ icon: 1 }));
+expectType<OpenSeadragon.Viewer>(OpenSeadragon({ id: "viewer", navImages: { home: { REST: "home_rest.png", GROUP: "home_grouphover.png", HOVER: "home_hover.png", DOWN: "home_pressed.png" } } }));
 viewer.destroy();
 
 // Viewport
@@ -113,6 +119,11 @@ viewer.addHandler("tile-loaded", (ev) => {
     expectType<OpenSeadragon.Tile>(ev.tile);
     expectType<OpenSeadragon.TiledImage>(ev.tiledImage);
 });
+viewer.addHandler("canvas-cooperative-gesture", (ev) => {
+    expectType<"drag" | "scroll">(ev.gesture);
+    expectType<string>(ev.message);
+    expectType<boolean>(ev.preventDefaultAction);
+});
 expectError(viewer.addHandler("invalid", () => {}));
 
 // Point
@@ -198,9 +209,12 @@ button.destroy();
 // MouseTracker
 const tracker = new OpenSeadragon.MouseTracker({
     element: document.createElement("div"),
+    cooperativeGestureHandling: true,
     clickHandler: (ev) => expectType<OpenSeadragon.MouseTracker>(ev.eventSource)
 });
 expectType<number>(tracker.getActivePointerCount());
+expectType<boolean>(tracker.cooperativeGestureHandling);
+expectType<OpenSeadragon.MouseTracker>(tracker.setCooperativeGestureHandling(false));
 tracker.setTracking(true);
 tracker.destroy();
 
@@ -271,5 +285,6 @@ expectType<any>(cacheRecord.getRenderedContext());
 expectType<Element>(OpenSeadragon.getElement("id"));
 expectType<OpenSeadragon.Point>(OpenSeadragon.getElementOffset(document.createElement("div")));
 expectType<OpenSeadragon.Point>(OpenSeadragon.getWindowSize());
+expectType<void>(OpenSeadragon.setElementTouchAction("id", "pan-x pan-y"));
 expectType<string>(OpenSeadragon.version.versionStr);
 expectType<boolean>(OpenSeadragon.supportsCanvas);

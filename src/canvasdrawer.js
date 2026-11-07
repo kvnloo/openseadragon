@@ -78,7 +78,8 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
 
         // Image smoothing for canvas rendering (only if canvas is used).
         // Canvas default is "true", so this will only be changed if user specifies "false" in the options or via setImageSmoothinEnabled.
-        this._imageSmoothingEnabled = true;
+        this._imageSmoothingEnabled = this.options.imageSmoothingEnabled !== undefined ?
+            !!this.options.imageSmoothingEnabled : true;
 
         // Since the tile-drawn and tile-drawing events are fired by this drawer, make sure handlers can be added for them
         this.viewer.allowEventHandler("tile-drawn");
@@ -87,9 +88,10 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
     }
 
     /**
+     * @param {Object} options - Options for this drawer.
      * @returns {Boolean} true if canvas is supported by the browser, otherwise false
      */
-    static isSupported(){
+    static isSupported(options){
         return $.supportsCanvas;
     }
 
@@ -168,7 +170,7 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
      */
     setImageSmoothingEnabled(imageSmoothingEnabled){
         this._imageSmoothingEnabled = !!imageSmoothingEnabled;
-        this._updateImageSmoothingEnabled(this.context);
+        this._applyImageSmoothingEnabled();
         this.viewer.forceRedraw();
     }
 
@@ -206,6 +208,9 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
      * @private
      */
     _raiseTileDrawingEvent(tiledImage, context, tile, rendered){
+        if (!this.viewer.numberOfHandlers('tile-drawing')) {
+            return;
+        }
         /**
          * This event is fired just before the tile is drawn giving the application a chance to alter the image.
          *
@@ -240,13 +245,12 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
             this.canvas.height !== viewportSize.y ) {
             this.canvas.width = viewportSize.x;
             this.canvas.height = viewportSize.y;
-            this._updateImageSmoothingEnabled(this.context);
             if ( this.sketchCanvas !== null ) {
                 const sketchCanvasSize = this._calculateSketchCanvasSize();
                 this.sketchCanvas.width = sketchCanvasSize.x;
                 this.sketchCanvas.height = sketchCanvasSize.y;
-                this._updateImageSmoothingEnabled(this.sketchContext);
             }
+            this._applyImageSmoothingEnabled();
         }
         this._clear();
     }
@@ -302,7 +306,7 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
             // Note: Disabled on iOS devices per default as it causes a native crash
             useSketch = true;
 
-            const context = tile.length && this.getDataToDraw(tile);
+            const context = this.getDataToDraw(tile);
             if (context) {
                 sketchScale = context.canvas.width / (tile.size.x * $.pixelDensityRatio);
             } else {
@@ -378,7 +382,7 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
             }
             usedClip = true;
         }
-        tiledImage._hasOpaqueTile = false;
+
         if ( tiledImage.placeholderFillStyle && tiledImage._hasOpaqueTile === false ) {
             let placeholderRect = this.viewportToDrawerRectangle(tiledImage.getBoundsNoRotate(true));
             if (sketchScale) {
@@ -388,7 +392,7 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
                 placeholderRect = placeholderRect.translate(sketchTranslate);
             }
 
-            let fillStyle = null;
+            let fillStyle;
             if ( typeof tiledImage.placeholderFillStyle === "function" ) {
                 fillStyle = tiledImage.placeholderFillStyle(tiledImage, this.context);
             }
@@ -415,7 +419,7 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
             this._drawTile( tile, tiledImage, useSketch, sketchScale,
                 sketchTranslate, shouldRoundPositionAndSize, tiledImage.source );
 
-            if( this.viewer ){
+            if (this.viewer && this.viewer.numberOfHandlers('tile-drawn')) {
                 /**
                  * Raised when a tile is drawn to the canvas. Only valid for
                  * context2d and html drawers.
@@ -551,6 +555,9 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
 
         context.save();
 
+        const opacity = context.globalAlpha * tile.opacity;
+        context.globalAlpha = opacity;
+
         if (typeof scale === 'number' && scale !== 1) {
             // draw tile at a different scale
             position = position.times(scale);
@@ -566,7 +573,7 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
         //ie its done fading or fading is turned off, and if we are drawing
         //an image with an alpha channel, then the only way
         //to avoid seeing the tile underneath is to clear the rectangle
-        if (context.globalAlpha === 1 && tile.hasTransparency) {
+        if (opacity === 1 && tile.hasTransparency) {
             if (shouldRoundPositionAndSize) {
                 // Round to the nearest whole pixel so we don't get seams from overlap.
                 position.x = Math.round(position.x);
@@ -646,6 +653,8 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
                         const sketchCanvasSize = self._calculateSketchCanvasSize();
                         self.sketchCanvas.width = sketchCanvasSize.x;
                         self.sketchCanvas.height = sketchCanvasSize.y;
+                        // resizing a canvas resets its 2d context state, smoothing included
+                        self._updateImageSmoothingEnabled(self.sketchContext);
                     });
                 }
                 this._updateImageSmoothingEnabled(this.sketchContext);
@@ -876,6 +885,17 @@ class CanvasDrawer extends OpenSeadragon.DrawerBase{
     _updateImageSmoothingEnabled(context){
         context.msImageSmoothingEnabled = this._imageSmoothingEnabled;
         context.imageSmoothingEnabled = this._imageSmoothingEnabled;
+    }
+
+    // private
+    // imageSmoothingEnabled is per-context state, and this drawer renders through two contexts:
+    // tiles that go through the sketch canvas - tiled image opacity below 1, non source-over
+    // compositing, transparency, tile edge smoothing - are scaled there, not on the main canvas.
+    _applyImageSmoothingEnabled(){
+        this._updateImageSmoothingEnabled(this.context);
+        if (this.sketchContext) {
+            this._updateImageSmoothingEnabled(this.sketchContext);
+        }
     }
 
     /**

@@ -1,7 +1,62 @@
 OPENSEADRAGON CHANGELOG
 =======================
 
-6.0.2: (in progress...)
+6.2.0: (in progress...)
+
+* BREAKING CHANGE: The default control buttons are now <button> elements in the tab order. CSS selectors that target them as divs (e.g. div[title="Zoom in"]) no longer match; use [title="Zoom in"]. Page-level button styles not covered by the inline reset (or marked !important) now apply to them. A disabled default button has aria-disabled="true" instead of element.disabled; use the new Button.isDisabled() to check, and call disable()/enable() rather than setting element.disabled. Buttons passed in via zoomInButton etc. are unchanged (#2989 @lukew-cogapp)
+* BREAKING CHANGE: OpenSeadragon.DEFAULT_SETTINGS.navImages is no longer set, so code that changes it globally (e.g. DEFAULT_SETTINGS.navImages.zoomIn.REST = ...) now throws. Pass navImages or buttonColors to the viewer instead (#3000 @lukew-cogapp)
+* The default control buttons are now flat SVG icons built in code, so they no longer need the images folder or prefixUrl. The new buttonColors option and Viewer.setButtonColors() set their colors, so they can follow a light/dark theme. navImages still overrides individual buttons, and the old PNGs are still shipped (#3000 @lukew-cogapp)
+* The default control buttons are now <button type="button"> elements, so keyboard and screen reader users can reach them; Space activates them as well as Enter (#2989 @lukew-cogapp)
+* The zoom in/out buttons are now disabled at maximum/minimum zoom. Buttons passed in via zoomInButton/zoomOutButton get element.disabled, as previousButton/nextButton already do. Calling enable() on a zoom button at its limit leaves it disabled until the zoom moves away (#2995 @lukew-cogapp)
+* Added controls-fade event so custom controls can fade in step with the built-in ones (#2991 @lukew-cogapp)
+* We now expose the HTTP status code in open-failed events when possible (#2972 @a-sayed123)
+* Improved tile loading speed. As part of this, panning or zooming into new territory now starts a short burst of extra tile requests to catch up quickly (#2953 @Aiosa)
+* The WebGL drawer now accepts ImageBitmaps (#2953 @Aiosa)
+* Tile loading and decoding recover more gracefully from transient failures instead of leaving the affected tiles stuck (#2953 @Aiosa)
+* Improved rendering performance by reducing the work done every frame when updating and drawing tiles (#3005 @lukew-cogapp)
+* Fixed a bug where tile downloads could be cancelled and restarted on every frame even when the view hadn't changed, which could stall loading when imageLoaderLimit was set (#2953 @Aiosa)
+* Fixed: ImageTileSource did not build its downsampling pyramid by default, causing aliasing when zoomed out (#2990 @lukew-cogapp)
+* Fixed: Viewer.isMouseNavEnabled() would always return undefined (#2997 @cavenel)
+* Fixed: PriorityQueue.insert() and DataTypeConverter.guessType() could throw (#3006 @lukew-cogapp)
+* Fixed: HTML drawer tiles stayed mirrored after unflipping, and canvas edge smoothing had no effect (#3007 @lukew-cogapp)
+* Improved unit tests (#2976 @animesh68)
+* CI now runs on Node 24 with current GitHub Actions versions (#2992 @lukew-cogapp)
+* Upgraded ESLint to v10 (#2993 @lukew-cogapp)
+
+6.1.1:
+
+* Added missing TypeScript declarations for cooperative gesture handling (#2949 @superbland)
+* Fixed: IIIF files with empty sizes array would fail to load (#2963 @firatciftci)
+* Fixed a small DataTypeConverter memory leak (#2971 @animesh68)
+* Additional TypeScript and documentation cleanup (#2961 @iangilman)
+* Improved unit tests (#2951 @lucifer2661)
+* Updated our unit test code coverage tool from istanbul to nyc (#2947 @Zaidzezo)
+* Expanded unit tests and made minor bug fixes (#2958 @Zaidzezo)
+
+6.1.0:
+
+* Now properly supporting non-power of two tile source levels (#2884 @Aiosa)
+* Added discardLevelsBelowDownsampleRatio option for both viewer and individual tiled images so you can control the pixel ratio between loaded levels (#2884 @Aiosa)
+* New UI feature: cooperative gesture handling, to allow normal scroll events on the page (#2934 @superbland)
+* Added stopImmediatePropagation to MouseTracker.EventProcessInfo options (#2891 @msalsbery)
+* It's now possible for the WebGLDrawer to use context2d objects from offscreen canvases (#2914 @koltenpearson)
+* Added tileQuality and extraQualities options to IIIFTileSource (#2916 @lukew-cogapp)
+* Better support for proper drawer choice and fallback for the navigator; added navigatorDrawer option (#2898 @jeffschuler)
+* Improved cache safety (#2942 @Aiosa)
+* Improved the isSupported API and documentation for drawers (#2903 @Aiosa)
+* Improved logic and documentation for viewer resize (#2900 @Aiosa)
+* Improved type annotation (#2912 @altundag, #2923 @msalsbery #2924 @msalsbery)
+* Improved documentation (#2910 @Aiosa, #2915 @lukew-cogapp)
+* Fixed tile blending in canvas and HTML drawers (#2893 @Aiosa)
+* Fixed an issue with placeholderFillStyle in the canvas drawer that would sometimes show a seam at the edge of an image (#2905 @pearcetm)
+* Fixed an issue with tile coverage tracking when multiple images are present (#2933 @Aiosa)
+* Fixed a bug where calling setVisible(false) on the navigator wouldn't hide it completely (#2944 @lucifer2661)
+* Now tracking built library size (#2806 @adriandarian)
+
+6.0.2:
+
+* Fixed an issue with being able to augment OSD's TypeScript types (#2887 @rssaini01)
+* Enhanced/fixed MouseTracker TypeScript types (#2888 @msalsbery)
 
 6.0.1:
 

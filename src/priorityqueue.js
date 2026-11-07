@@ -15,13 +15,11 @@ const OpenSeadragon = $; // alias for JSDoc
 /**
  * @class OpenSeadragon.PriorityQueue
  * @classdesc Fast priority queue. Implemented as a Heap.
+ * @param {?OpenSeadragon.PriorityQueue} optHeap Optional Heap
+ *     to initialize heap with.
  */
 OpenSeadragon.PriorityQueue = class PriorityQueue {
 
-    /**
-     * @param {?OpenSeadragon.PriorityQueue} optHeap Optional Heap or
-     *     Object to initialize heap with.
-     */
     constructor(optHeap = undefined) {
         /**
          * The nodes of the heap.
@@ -49,7 +47,7 @@ OpenSeadragon.PriorityQueue = class PriorityQueue {
      * @param {V} value The value.
      */
     insert(key, value) {
-        this.insertNode(new Node(key, value));
+        this.insertNode(new $.PriorityQueue.Node(key, value));
     }
 
     /**
@@ -64,7 +62,7 @@ OpenSeadragon.PriorityQueue = class PriorityQueue {
     }
 
     /**
-     * Adds multiple key-value pairs from another Heap or Object
+     * Adds multiple key-value pairs from another Heap
      * @param {?OpenSeadragon.PriorityQueue} heap Object containing the data to add.
      */
     insertAll(heap) {
@@ -79,7 +77,7 @@ OpenSeadragon.PriorityQueue = class PriorityQueue {
             if (this.getCount() <= 0) {
                 const nodes = this.nodes_;
                 for (let i = 0; i < keys.length; i++) {
-                    const node = new Node(keys[i], values[i]);
+                    const node = new $.PriorityQueue.Node(keys[i], values[i]);
                     node.index = nodes.length;
                     nodes.push(node);
                 }

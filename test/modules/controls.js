@@ -24,6 +24,29 @@
         }
     });
 
+    QUnit.test('ButtonColors', function (assert) {
+        viewer = OpenSeadragon({
+            id:           'controlsTests',
+            prefixUrl:    '/build/openseadragon/images/',
+            buttonColors: { icon: '#ff0000' },
+            navImages:    { home: { REST: 'home_rest.png', GROUP: 'home_grouphover.png', HOVER: 'home_hover.png', DOWN: 'home_pressed.png' } }
+        });
+
+        const zoomInSrc = viewer.zoomInButton.imgRest.getAttribute('src');
+        assert.ok(zoomInSrc.startsWith('data:image/svg+xml,'), 'default buttons use data URLs without prefixUrl');
+        assert.ok(zoomInSrc.includes(encodeURIComponent('#ff0000')), 'icon color is applied');
+        assert.ok(zoomInSrc.includes(encodeURIComponent('#f4f5f7')), 'unset background keeps its default');
+        assert.equal(viewer.homeButton.imgRest.getAttribute('src'), '/build/openseadragon/images/home_rest.png',
+            'navImages overrides one button and keeps prefixUrl');
+
+        viewer.setButtonColors({ background: '#00ff00' });
+        const newZoomInSrc = viewer.zoomInButton.imgRest.getAttribute('src');
+        assert.ok(newZoomInSrc.includes(encodeURIComponent('#00ff00')), 'setButtonColors rebuilds default buttons');
+        assert.ok(newZoomInSrc.includes(encodeURIComponent('#ff0000')), 'setButtonColors keeps the unchanged color');
+        assert.equal(viewer.homeButton.imgRest.getAttribute('src'), '/build/openseadragon/images/home_rest.png',
+            'setButtonColors leaves navImages overrides alone');
+    });
+
     QUnit.test('ZoomControlOff', function (assert) {
         const done = assert.async();
         const openHandler = function () {
@@ -69,6 +92,204 @@
 
             viewer.close();
             done();
+        };
+
+        viewer = OpenSeadragon({
+            id:             'controlsTests',
+            prefixUrl:      '/build/openseadragon/images/',
+            springStiffness: 100, // Faster animation = faster tests
+            showZoomControl: true
+        });
+        viewer.addHandler('open', openHandler);
+        viewer.open('/test/data/testpattern.dzi');
+    });
+
+    QUnit.test('ZoomControlDisabledAtLimits', function (assert) {
+        const done = assert.async();
+        const zoomAndWait = function (zoom, callback) {
+            viewer.addOnceHandler('viewport-change', callback);
+            viewer.viewport.zoomTo(zoom, null, true);
+        };
+        const openHandler = function () {
+            viewer.removeHandler('open', openHandler);
+            assert.ok(!viewer.zoomInButton.isDisabled(), "zoomIn button should start enabled");
+            assert.ok(!viewer.zoomOutButton.isDisabled(), "zoomOut button should start enabled");
+
+            zoomAndWait(viewer.viewport.getMaxZoom(), function () {
+                assert.ok(viewer.zoomInButton.isDisabled(), "zoomIn button should be disabled at max zoom");
+                assert.ok(!viewer.zoomOutButton.isDisabled(), "zoomOut button should be enabled at max zoom");
+
+                zoomAndWait(viewer.viewport.getMinZoom(), function () {
+                    assert.ok(!viewer.zoomInButton.isDisabled(), "zoomIn button should be enabled at min zoom");
+                    assert.ok(viewer.zoomOutButton.isDisabled(), "zoomOut button should be disabled at min zoom");
+                    done();
+                });
+            });
+        };
+
+        viewer = OpenSeadragon({
+            id:             'controlsTests',
+            prefixUrl:      '/build/openseadragon/images/',
+            springStiffness: 100, // Faster animation = faster tests
+            showZoomControl: true
+        });
+        viewer.addHandler('open', openHandler);
+        viewer.open('/test/data/testpattern.dzi');
+    });
+
+    QUnit.test('ZoomControlDisabledAtConstrainedLimits', function (assert) {
+        const done = assert.async();
+        // An off-centre pivot makes the constrained zoom drift an ulp off the limit.
+        const zoomRepeatedlyAndWait = function (factor, callback) {
+            const pivot = new OpenSeadragon.Point(1, 1);
+            for (let i = 0; i < 40; i++) {
+                viewer.viewport.zoomBy(factor, pivot, true);
+                viewer.viewport.applyConstraints(true);
+            }
+            viewer.addOnceHandler('viewport-change', callback);
+        };
+        const openHandler = function () {
+            viewer.removeHandler('open', openHandler);
+            zoomRepeatedlyAndWait(2, function () {
+                assert.ok(viewer.zoomInButton.isDisabled(), "zoomIn button should be disabled at max zoom");
+
+                zoomRepeatedlyAndWait(0.5, function () {
+                    assert.ok(viewer.zoomOutButton.isDisabled(), "zoomOut button should be disabled at min zoom");
+                    done();
+                });
+            });
+        };
+
+        viewer = OpenSeadragon({
+            id:             'controlsTests',
+            prefixUrl:      '/build/openseadragon/images/',
+            springStiffness: 100, // Faster animation = faster tests
+            showZoomControl: true
+        });
+        viewer.addHandler('open', openHandler);
+        viewer.open('/test/data/testpattern.dzi');
+    });
+
+    QUnit.test('ZoomControlUpdatesWhenWorldChanges', function (assert) {
+        const done = assert.async();
+        const openHandler = function () {
+            viewer.removeHandler('open', openHandler);
+            viewer.addOnceHandler('viewport-change', function () {
+                assert.ok(viewer.zoomOutButton.isDisabled(), "zoomOut button should be disabled at min zoom");
+
+                // Widening the world lowers the min zoom without moving the viewport.
+                viewer.addTiledImage({
+                    tileSource: '/test/data/testpattern.dzi',
+                    x: 10,
+                    success: function () {
+                        assert.ok(!viewer.zoomOutButton.isDisabled(), "zoomOut button should be enabled once the world grows");
+                        done();
+                    }
+                });
+            });
+            viewer.viewport.zoomTo(viewer.viewport.getMinZoom(), null, true);
+        };
+
+        viewer = OpenSeadragon({
+            id:             'controlsTests',
+            prefixUrl:      '/build/openseadragon/images/',
+            springStiffness: 100, // Faster animation = faster tests
+            showZoomControl: true
+        });
+        viewer.addHandler('open', openHandler);
+        viewer.open('/test/data/testpattern.dzi');
+    });
+
+    QUnit.test('ZoomControlUpdatesWhenMaxZoomPixelRatioChanges', function (assert) {
+        const done = assert.async();
+        const openHandler = function () {
+            viewer.removeHandler('open', openHandler);
+            viewer.addOnceHandler('viewport-change', function () {
+                assert.ok(viewer.zoomInButton.isDisabled(), "zoomIn button should be disabled at max zoom");
+                viewer.viewport.setMaxZoomPixelRatio(viewer.viewport.getMaxZoomPixelRatio() * 2);
+                assert.ok(!viewer.zoomInButton.isDisabled(), "zoomIn button should be enabled once max zoom rises");
+                done();
+            });
+            viewer.viewport.zoomTo(viewer.viewport.getMaxZoom(), null, true);
+        };
+
+        viewer = OpenSeadragon({
+            id:             'controlsTests',
+            prefixUrl:      '/build/openseadragon/images/',
+            springStiffness: 100, // Faster animation = faster tests
+            showZoomControl: true
+        });
+        viewer.addHandler('open', openHandler);
+        viewer.open('/test/data/testpattern.dzi');
+    });
+
+    QUnit.test('ZoomControlKeepsManualDisable', function (assert) {
+        const done = assert.async();
+        const openHandler = function () {
+            viewer.removeHandler('open', openHandler);
+            const viewport = viewer.viewport;
+            viewer.addOnceHandler('viewport-change', function () {
+                assert.ok(viewer.zoomInButton.isDisabled(), "zoomIn button should be disabled at max zoom");
+                viewer.zoomInButton.disable();
+                viewer.addOnceHandler('viewport-change', function () {
+                    assert.ok(viewer.zoomInButton.isDisabled(), "manually disabled zoomIn button should stay disabled");
+                    done();
+                });
+                viewport.zoomTo((viewport.getMinZoom() + viewport.getMaxZoom()) / 2, null, true);
+            });
+            viewport.zoomTo(viewport.getMaxZoom(), null, true);
+        };
+
+        viewer = OpenSeadragon({
+            id:             'controlsTests',
+            prefixUrl:      '/build/openseadragon/images/',
+            springStiffness: 100, // Faster animation = faster tests
+            showZoomControl: true
+        });
+        viewer.addHandler('open', openHandler);
+        viewer.open('/test/data/testpattern.dzi');
+    });
+
+    QUnit.test('ZoomControlStaysDisabledAtLimitAfterEnable', function (assert) {
+        const done = assert.async();
+        const openHandler = function () {
+            viewer.removeHandler('open', openHandler);
+            const viewport = viewer.viewport;
+            viewer.addOnceHandler('viewport-change', function () {
+                viewer.zoomInButton.enable();
+                assert.ok(viewer.zoomInButton.isDisabled(), "zoomIn button should stay disabled at max zoom after enable()");
+                viewer.addOnceHandler('viewport-change', function () {
+                    assert.ok(!viewer.zoomInButton.isDisabled(), "zoomIn button should be enabled once zoomed away");
+                    done();
+                });
+                viewport.zoomTo((viewport.getMinZoom() + viewport.getMaxZoom()) / 2, null, true);
+            });
+            viewport.zoomTo(viewport.getMaxZoom(), null, true);
+        };
+
+        viewer = OpenSeadragon({
+            id:             'controlsTests',
+            prefixUrl:      '/build/openseadragon/images/',
+            springStiffness: 100, // Faster animation = faster tests
+            showZoomControl: true
+        });
+        viewer.addHandler('open', openHandler);
+        viewer.open('/test/data/testpattern.dzi');
+    });
+
+    QUnit.test('ZoomControlUpdatesWhenReopenedAtLimit', function (assert) {
+        const done = assert.async();
+        const openHandler = function () {
+            viewer.removeHandler('open', openHandler);
+            viewer.addOnceHandler('viewport-change', function () {
+                assert.ok(viewer.zoomInButton.isDisabled(), "zoomIn button should be disabled at max zoom");
+                viewer.addOnceHandler('open', function () {
+                    assert.ok(!viewer.zoomInButton.isDisabled(), "zoomIn button should be enabled after reopening at home zoom");
+                    done();
+                });
+                viewer.open('/test/data/testpattern.dzi');
+            });
+            viewer.viewport.zoomTo(viewer.viewport.getMaxZoom(), null, true);
         };
 
         viewer = OpenSeadragon({
@@ -289,30 +510,30 @@
                 "The next button should be present");
 
             assert.equal(viewer.currentPage(), 0, "OSD should open on first page.");
-            assert.ok(viewer.previousButton.element.disabled,
+            assert.ok(viewer.previousButton.isDisabled(),
                 "Previous should be disabled on first page.");
-            assert.ok(!viewer.nextButton.element.disabled,
+            assert.ok(!viewer.nextButton.isDisabled(),
                 "Next should be enabled on first page.");
 
             viewer.nextButton.onRelease();
             assert.equal(viewer.currentPage(), 1, "OSD should be on second page.");
-            assert.ok(!viewer.previousButton.element.disabled,
+            assert.ok(!viewer.previousButton.isDisabled(),
                 "Previous should be enabled on second page.");
-            assert.ok(!viewer.nextButton.element.disabled,
+            assert.ok(!viewer.nextButton.isDisabled(),
                 "Next should be enabled on second page.");
 
             viewer.nextButton.onRelease();
             assert.equal(viewer.currentPage(), 2, "OSD should be on third page.");
-            assert.ok(!viewer.previousButton.element.disabled,
+            assert.ok(!viewer.previousButton.isDisabled(),
                 "Previous should be enabled on third page.");
-            assert.ok(viewer.nextButton.element.disabled,
+            assert.ok(viewer.nextButton.isDisabled(),
                 "Next should be disabled on third page.");
 
             viewer.previousButton.onRelease();
             assert.equal(viewer.currentPage(), 1, "OSD should be on second page.");
-            assert.ok(!viewer.previousButton.element.disabled,
+            assert.ok(!viewer.previousButton.isDisabled(),
                 "Previous should be enabled on second page.");
-            assert.ok(!viewer.nextButton.element.disabled,
+            assert.ok(!viewer.nextButton.isDisabled(),
                 "Next should be enabled on second page.");
 
             viewer.close();
@@ -348,23 +569,23 @@
                 "The next button should be present");
 
             assert.equal(viewer.currentPage(), 0, "OSD should open on first page.");
-            assert.ok(!viewer.previousButton.element.disabled,
+            assert.ok(!viewer.previousButton.isDisabled(),
                 "Previous should be enabled on first page.");
-            assert.ok(!viewer.nextButton.element.disabled,
+            assert.ok(!viewer.nextButton.isDisabled(),
                 "Next should be enabled on first page.");
 
             viewer.previousButton.onRelease();
             assert.equal(viewer.currentPage(), 2, "OSD should be on third page.");
-            assert.ok(!viewer.previousButton.element.disabled,
+            assert.ok(!viewer.previousButton.isDisabled(),
                 "Previous should be enabled on third page.");
-            assert.ok(!viewer.nextButton.element.disabled,
+            assert.ok(!viewer.nextButton.isDisabled(),
                 "Next should be enabled on third page.");
 
             viewer.nextButton.onRelease();
             assert.equal(viewer.currentPage(), 0, "OSD should be on first page.");
-            assert.ok(!viewer.previousButton.element.disabled,
+            assert.ok(!viewer.previousButton.isDisabled(),
                 "Previous should be enabled on first page.");
-            assert.ok(!viewer.nextButton.element.disabled,
+            assert.ok(!viewer.nextButton.isDisabled(),
                 "Next should be enabled on first page.");
 
             viewer.close();
@@ -385,6 +606,246 @@
             navPrevNextWrap: true
         });
         viewer.addHandler('open', openHandler);
+    });
+
+    function createFadeViewer(options) {
+        viewer = OpenSeadragon($.extend({
+            id:                 'controlsTests',
+            prefixUrl:          '/build/openseadragon/images/',
+            controlsFadeDelay:  0,
+            controlsFadeLength: 50
+        }, options));
+    }
+
+    QUnit.test('controls-fade event', function (assert) {
+        const done = assert.async();
+        createFadeViewer();
+
+        let lastOpacity = 1;
+        const fadeHandler = function (event) {
+            assert.ok(event.opacity <= lastOpacity, 'opacity should only decrease while fading');
+            lastOpacity = event.opacity;
+            if (event.opacity === 0) {
+                viewer.removeHandler('controls-fade', fadeHandler);
+                const shown = [];
+                viewer.addHandler('controls-fade', function (showEvent) {
+                    shown.push(showEvent.opacity);
+                });
+                viewer.setControlsEnabled(true);
+                viewer.setControlsEnabled(true);
+                setTimeout(function () {
+                    assert.deepEqual(shown, [1], 'showing the controls should report full opacity once');
+                    done();
+                }, 100);
+            }
+        };
+        viewer.addHandler('controls-fade', fadeHandler);
+        viewer.setControlsEnabled(false);
+    });
+
+    QUnit.test('controls-fade runs one fade after a restart', function (assert) {
+        const done = assert.async();
+        createFadeViewer({ controlsFadeLength: 10000 });
+
+        let events = 0;
+        let frames = 0;
+        let counting = true;
+        const countFrames = function () {
+            if (counting) {
+                frames++;
+                requestAnimationFrame(countFrames);
+            }
+        };
+
+        const firstHandler = function () {
+            viewer.removeHandler('controls-fade', firstHandler);
+            viewer.setControlsEnabled(true);
+            viewer.setControlsEnabled(false);
+            viewer.addHandler('controls-fade', function () {
+                events++;
+            });
+            requestAnimationFrame(countFrames);
+            setTimeout(function () {
+                counting = false;
+                assert.ok(frames > 0, 'frames should have been drawn');
+                assert.ok(events <= frames + 1,
+                    'should raise at most one event per frame (' + events + ' events, ' + frames + ' frames)');
+                done();
+            }, 200);
+        };
+        viewer.addHandler('controls-fade', firstHandler);
+        viewer.setControlsEnabled(false);
+    });
+
+    QUnit.test('controls-fade not raised when shown before the fade starts', function (assert) {
+        const done = assert.async();
+        createFadeViewer({ controlsFadeDelay: 1000 });
+
+        let events = 0;
+        viewer.addHandler('controls-fade', function () {
+            events++;
+        });
+        viewer.setControlsEnabled(false);
+        viewer.setControlsEnabled(true);
+        setTimeout(function () {
+            assert.equal(events, 0, 'no fade events should be raised');
+            done();
+        }, 100);
+    });
+
+    QUnit.test('controls-fade not raised when autoHideControls is off', function (assert) {
+        const done = assert.async();
+        createFadeViewer({ autoHideControls: false });
+
+        let events = 0;
+        viewer.addHandler('controls-fade', function () {
+            events++;
+        });
+        viewer.setControlsEnabled(false);
+        viewer.setControlsEnabled(true);
+        setTimeout(function () {
+            assert.equal(events, 0, 'no fade events should be raised');
+            done();
+        }, 100);
+    });
+
+    QUnit.module('Control');
+
+    QUnit.test('deprecated number anchor', function(assert) {
+        var container = document.createElement('div');
+        document.getElementById('qunit-fixture').appendChild(container);
+
+        var element = document.createElement('button');
+
+        var originalError = OpenSeadragon.console.error;
+        var errorLogged = false;
+        OpenSeadragon.console.error = function(msg) {
+            if (msg && msg.indexOf('deprecated') !== -1) {
+                errorLogged = true;
+            }
+            originalError.apply(this, arguments);
+        };
+
+        // Pass the raw number 1 (TOP_LEFT value) to trigger the deprecated path
+        var control = new OpenSeadragon.Control(element, 1, container);
+
+        OpenSeadragon.console.error = originalError;
+
+        assert.ok(errorLogged, 'deprecation warning logged');
+        assert.equal(control.anchor, OpenSeadragon.ControlAnchor.TOP_LEFT, 'anchor set correctly');
+
+        control.destroy();
+    });
+
+    QUnit.test('ABSOLUTE anchor', function(assert) {
+        var container = document.createElement('div');
+        document.getElementById('qunit-fixture').appendChild(container);
+
+        var element = document.createElement('div');
+        var control = new OpenSeadragon.Control(element, {
+            anchor: OpenSeadragon.ControlAnchor.ABSOLUTE,
+            top: 10,
+            left: 20,
+            width: 100,
+            height: 50
+        }, container);
+
+        assert.equal(control.wrapper.style.position, 'absolute', 'position is absolute');
+        assert.equal(control.wrapper.style.top, '10px', 'top set');
+        assert.equal(control.wrapper.style.left, '20px', 'left set');
+        assert.equal(control.wrapper.style.width, '100px', 'width set');
+        assert.equal(control.wrapper.style.height, '50px', 'height set');
+        assert.equal(control.element.style.position, 'relative', 'element position is relative');
+
+        control.destroy();
+    });
+
+    QUnit.test('NONE anchor', function(assert) {
+        var container = document.createElement('div');
+        document.getElementById('qunit-fixture').appendChild(container);
+
+        var element = document.createElement('button');
+        // element must be in the DOM so parentNode isn't null when attachToViewer: false
+        container.appendChild(element);
+
+        var control = new OpenSeadragon.Control(element, {
+            anchor: OpenSeadragon.ControlAnchor.NONE,
+            attachToViewer: false
+        }, container);
+
+        assert.equal(control.wrapper.style.width, '100%', 'width is 100%');
+        assert.equal(control.wrapper.style.height, '100%', 'height is 100%');
+
+        control.destroy();
+    });
+
+    QUnit.test('attachToViewer false', function(assert) {
+        var parent = document.createElement('div');
+        document.getElementById('qunit-fixture').appendChild(parent);
+
+        var element = document.createElement('button');
+        // element must be a child of parent so parentNode is valid when attachToViewer: false
+        parent.appendChild(element);
+
+        var control = new OpenSeadragon.Control(element, {
+            anchor: OpenSeadragon.ControlAnchor.NONE,
+            attachToViewer: false
+        }, parent);
+
+        assert.ok(parent.contains(control.wrapper), 'wrapper added to parent');
+
+        control.destroy();
+        assert.ok(!parent.contains(control.wrapper), 'wrapper removed on destroy');
+    });
+
+    QUnit.test('destroy with anchor', function(assert) {
+        var container = document.createElement('div');
+        document.getElementById('qunit-fixture').appendChild(container);
+
+        var element = document.createElement('button');
+        var control = new OpenSeadragon.Control(element, {
+            anchor: OpenSeadragon.ControlAnchor.TOP_RIGHT
+        }, container);
+
+        assert.ok(container.contains(control.wrapper), 'wrapper in container before destroy');
+        control.destroy();
+        assert.ok(!container.contains(control.wrapper), 'wrapper removed from container after destroy');
+        assert.ok(!control.wrapper.contains(element), 'element removed from wrapper after destroy');
+    });
+
+    QUnit.test('isVisible and setVisible', function(assert) {
+        var container = document.createElement('div');
+        document.getElementById('qunit-fixture').appendChild(container);
+
+        var element = document.createElement('button');
+        var control = new OpenSeadragon.Control(element, {
+            anchor: OpenSeadragon.ControlAnchor.TOP_LEFT
+        }, container);
+
+        assert.ok(control.isVisible(), 'visible by default');
+
+        control.setVisible(false);
+        assert.ok(!control.isVisible(), 'hidden after setVisible(false)');
+
+        control.setVisible(true);
+        assert.ok(control.isVisible(), 'visible after setVisible(true)');
+
+        control.destroy();
+    });
+
+    QUnit.test('setOpacity', function(assert) {
+        var container = document.createElement('div');
+        document.getElementById('qunit-fixture').appendChild(container);
+
+        var element = document.createElement('button');
+        var control = new OpenSeadragon.Control(element, {
+            anchor: OpenSeadragon.ControlAnchor.TOP_LEFT
+        }, container);
+
+        control.setOpacity(0.5);
+        assert.equal(control.wrapper.style.opacity, '0.5', 'opacity is set');
+
+        control.destroy();
     });
 
 })();

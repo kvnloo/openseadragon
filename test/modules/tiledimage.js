@@ -253,6 +253,67 @@
     });
 
     // ----------
+    QUnit.test('tile load rate boost decays once per frame, not once per level', function(assert) {
+        const done = assert.async();
+
+        viewer.addHandler('open', function() {
+            const image = viewer.world.getItemAt(0);
+            const steady = image.maxTilesPerFrame;
+
+            // _updateLevel runs once per pyramid level, so decaying there collapsed the whole boost within a
+            // single frame and the boost never actually did anything.
+            image._boostTileLoadingRate();
+            const boosted = image._currentMaxTilesPerFrame;
+            assert.equal(boosted, steady * 10, 'Boost raises the per-frame allowance tenfold.');
+
+            image._updateLevelsForViewport();
+            assert.equal(image._currentMaxTilesPerFrame, Math.ceil(boosted / 2),
+                'One frame halves the allowance exactly once, whatever the level count.');
+
+            // And it must bottom out at the configured steady-state value rather than decaying to nothing.
+            for (let i = 0; i < 20; i++) {
+                image._updateLevelsForViewport();
+            }
+            assert.equal(image._currentMaxTilesPerFrame, steady,
+                'The allowance decays down to maxTilesPerFrame and stops there.');
+
+            done();
+        });
+
+        viewer.open({
+            tileSource: '/test/data/testpattern.dzi'
+        });
+    });
+
+    // ----------
+    QUnit.test('tile load rate is re-boosted whenever tiles become needed', function(assert) {
+        const done = assert.async();
+
+        viewer.addHandler('open', function() {
+            const image = viewer.world.getItemAt(0);
+
+            // Settle the allowance at its steady-state value.
+            image._setFullyLoaded(true);
+            for (let i = 0; i < 20; i++) {
+                image._updateLevelsForViewport();
+            }
+            assert.equal(image._currentMaxTilesPerFrame, image.maxTilesPerFrame, 'Allowance starts settled.');
+
+            // Discovering that the view is incomplete - what a pan or zoom does - must refill fast rather than
+            // trickle at the steady-state rate. Before this, only reset() ever re-armed the boost.
+            image._setFullyLoaded(false);
+            assert.equal(image._currentMaxTilesPerFrame, image.maxTilesPerFrame * 10,
+                'Becoming not-fully-loaded re-boosts the per-frame allowance.');
+
+            done();
+        });
+
+        viewer.open({
+            tileSource: '/test/data/testpattern.dzi'
+        });
+    });
+
+    // ----------
     QUnit.test('clip-change event', function(assert) {
         const done = assert.async();
         assert.expect(0);
@@ -344,6 +405,34 @@
         viewer.open({
             tileSource: '/test/data/testpattern.dzi',
         });
+    });
+
+    // ----------
+    QUnit.test('level opacity ramp', function(assert) {
+        // Pure function of minPixelRatio: call it directly rather than driving a viewer to a scale.
+        const opacityAt = (minPixelRatio, renderPixelRatio) =>
+            OpenSeadragon.TiledImage.prototype._getLevelOpacity.call(
+                { minPixelRatio: minPixelRatio }, renderPixelRatio);
+
+        // Default ratio: the ramp spans [minPixelRatio, 2 * minPixelRatio), which is the range level
+        // selection actually draws a level at.
+        assert.strictEqual(opacityAt(0.5, 0.5), 0, 'default: transparent at minPixelRatio');
+        assert.strictEqual(opacityAt(0.5, 0.75), 0.5, 'default: half way up the ramp');
+        assert.strictEqual(opacityAt(0.5, 1), 1, 'default: opaque at twice minPixelRatio');
+        assert.strictEqual(opacityAt(0.5, 2), 1, 'default: clamped above the ramp');
+        assert.strictEqual(opacityAt(0.5, 0.25), 0,
+            'default: clamped below the ramp, where the minimum level bypasses the selection gate');
+
+        // A non-default minPixelRatio must move the ramp with it: a hard-coded 0.5 would report 0.41
+        // instead of 0 at minRatio here, and reach full opacity before the level is done fading in.
+        const minRatio = 1 / Math.SQRT2;
+        assert.strictEqual(opacityAt(minRatio, minRatio), 0, 'custom: transparent at minPixelRatio');
+        assert.strictEqual(opacityAt(minRatio, 1.5 * minRatio), 0.5, 'custom: half way up the ramp');
+        assert.strictEqual(opacityAt(minRatio, 2 * minRatio), 1, 'custom: opaque at twice minPixelRatio');
+
+        // No ramp without a positive ratio - the division would be meaningless.
+        assert.strictEqual(opacityAt(0, 0), 1, 'zero minPixelRatio disables the ramp');
+        assert.strictEqual(opacityAt(-1, 0.5), 1, 'negative minPixelRatio disables the ramp');
     });
 
     // ----------
@@ -558,6 +647,71 @@
         viewer.open([{
             tileSource: '/test/data/tall.dzi',
         }]);
+    });
+
+    QUnit.test('_visitTiles matches Rect.intersection for every candidate tile', function(assert) {
+        const done = assert.async();
+
+        viewer.addHandler('open', function() {
+            const image = viewer.world.getItemAt(0);
+            const level = image.source.maxLevel;
+            const tile = image.getTileBounds(level, 1, 1);
+            const left = tile.x / 2;
+            const top = tile.y / 2;
+
+            const areas = {
+                interior: new OpenSeadragon.Rect(0.3, 0.3, 0.2, 0.2),
+                'ending on a tile edge': new OpenSeadragon.Rect(left, tile.y + 0.01, left, 0.1),
+                'ending on a tile corner': new OpenSeadragon.Rect(left, top, left, top),
+                'zero width': new OpenSeadragon.Rect(tile.x, 0.1, 0, 0.5),
+                'zero size': new OpenSeadragon.Rect(tile.x, tile.y, 0, 0),
+                rotated: new OpenSeadragon.Rect(0.3, 0.3, 0.2, 0.2, 30),
+                'past the right of the image': new OpenSeadragon.Rect(0.8, 0.2, 0.5, 0.3),
+            };
+
+            function check(label) {
+                Object.keys(areas).forEach(function(name) {
+                    const area = areas[name];
+                    const candidates = [];
+                    const getTileBounds = image.getTileBounds;
+                    image.getTileBounds = function(l, x, y) {
+                        const bounds = getTileBounds.apply(this, arguments);
+                        candidates.push({ key: x + ',' + y, bounds: bounds });
+                        return bounds;
+                    };
+                    const visited = new Set();
+                    image._visitTiles(level, area, function(x, y) {
+                        visited.add(x + ',' + y);
+                    });
+                    image.getTileBounds = getTileBounds;
+
+                    const mismatches = candidates.filter(function(candidate) {
+                        return visited.has(candidate.key) !== (area.intersection(candidate.bounds) !== null);
+                    }).map(function(candidate) {
+                        return candidate.key;
+                    });
+                    assert.deepEqual(mismatches, [], label + ', ' + name + ': visits the tiles Rect.intersection reports');
+                });
+            }
+
+            check('plain');
+            image.wrapHorizontal = true;
+            check('wrapped');
+            image.wrapHorizontal = false;
+            image.setFlip(true);
+            check('flipped');
+            done();
+        });
+
+        // Power-of-two sizes put tile edges on exact binary fractions, so an area can end exactly on one
+        viewer.open({
+            width: 1024,
+            height: 1024,
+            tileSize: 256,
+            getTileUrl: function() {
+                return '/test/data/testpattern_files/0/0_0.jpg';
+            }
+        });
     });
 
     QUnit.test('_getCornerTiles without wrapping', function(assert) {
