@@ -345,7 +345,7 @@
 
     // ----------
     // The timeout of a tile, through the real ImageJob and TileSource with a fake request.
-    const startTileJob = function() {
+    const startTileJob = function(onCompletion) {
         const result = { completions: [] };
         result.job = new OpenSeadragon.ImageJob({
             src: 'fake-tile',
@@ -357,6 +357,9 @@
                     data: job.data,
                     errorMsg: job.errorMsg
                 });
+                if (onCompletion) {
+                    onCompletion(job);
+                }
             }
         });
         result.job.start();
@@ -368,6 +371,92 @@
         xhr.response = new ArrayBuffer(1);
         xhr.respond(200);
     };
+
+    // ----------
+    QUnit.test('An ImageJob completion can enqueue another job without losing a queue slot', function(assert) {
+        OpenSeadragon.setAjaxLoaderLimit(1);
+        let reentrant;
+
+        const first = startTileJob(function() {
+            reentrant = startTileJob();
+        });
+        const waiting = startTileJob();
+
+        assert.deepEqual([first.xhr.sendCount, waiting.xhr.sendCount], [1, 0],
+            'The first job holds the only slot and the second waits');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.numActiveRequests, 1,
+            'One request is active before the completion callback');
+
+        respondWithTile(first.xhr);
+
+        assert.strictEqual(first.completions.length, 1, 'The first job completes once');
+        assert.ok(reentrant, 'The synchronous completion callback enqueues another job');
+        assert.deepEqual([first.xhr.sendCount, waiting.xhr.sendCount, reentrant.xhr.sendCount],
+            [1, 1, 0], 'The previous waiter starts before the reentrant job');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.numActiveRequests, 1,
+            'The reentrant callback does not double-release the occupied slot');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.requestFuncs.length, 1,
+            'The reentrant job is queued behind the active job');
+
+        respondWithTile(waiting.xhr);
+
+        assert.strictEqual(waiting.completions.length, 1, 'The original waiter completes once');
+        assert.strictEqual(reentrant.xhr.sendCount, 1, 'The reentrant job starts exactly once');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.numActiveRequests, 1,
+            'The reentrant job owns the released slot');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.requestFuncs.length, 0,
+            'No job remains queued after its dispatch');
+
+        respondWithTile(reentrant.xhr);
+
+        assert.deepEqual([first.completions.length, waiting.completions.length, reentrant.completions.length],
+            [1, 1, 1], 'Each ImageJob reports exactly one completion');
+        assert.deepEqual([first.completions[0].errorMsg, waiting.completions[0].errorMsg,
+            reentrant.completions[0].errorMsg], [null, null, null],
+            'Every ImageJob finishes successfully');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.numActiveRequests, 0,
+            'No slot leaks after the last job completes');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.requestFuncs.length, 0,
+            'The queue is fully drained');
+    });
+
+    // ----------
+    QUnit.test('A throwing ImageJob completion still releases its queue slot', function(assert) {
+        OpenSeadragon.setAjaxLoaderLimit(1);
+
+        const throwing = startTileJob(function() {
+            throw new Error('ImageJob callback failed');
+        });
+        const waiting = startTileJob();
+
+        assert.deepEqual([throwing.xhr.sendCount, waiting.xhr.sendCount], [1, 0],
+            'The second job waits for the first');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.numActiveRequests, 1,
+            'Only the first job occupies a slot');
+
+        assert.throws(function() {
+            respondWithTile(throwing.xhr);
+        }, /ImageJob callback failed/, 'The completed job propagates its own callback exception');
+
+        assert.strictEqual(throwing.completions.length, 1,
+            'The throwing callback was invoked only once');
+        assert.strictEqual(waiting.xhr.sendCount, 1,
+            'The next job was dispatched despite the exception');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.numActiveRequests, 1,
+            'Only the next job occupies the slot after the exception');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.requestFuncs.length, 0,
+            'The next job is not stranded in the queue');
+
+        respondWithTile(waiting.xhr);
+
+        assert.strictEqual(waiting.completions.length, 1, 'The next job completes once');
+        assert.strictEqual(waiting.completions[0].errorMsg, null,
+            'The next job finishes successfully');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.numActiveRequests, 0,
+            'The final completion releases the last slot');
+        assert.strictEqual(OpenSeadragon.AjaxQueue.requestFuncs.length, 0,
+            'No requests remain queued');
+    });
 
     // ----------
     QUnit.test('Waiting for a slot does not count toward the timeout of a tile', function(assert) {
