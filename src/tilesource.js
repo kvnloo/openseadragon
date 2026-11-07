@@ -46,8 +46,8 @@
  * @property {Boolean} [options.ajaxWithCredentials]
  *      If this TileSource needs to make an AJAX call, this specifies whether to set
  *      the XHR's withCredentials (for accessing secure data).
- * @property {Object} [options.ajaxHeaders]
- *      A set of headers to include in AJAX requests.
+ * @property {Object|Function} [options.ajaxHeaders]
+ *      Headers, or a zero-argument function returning headers when a metadata request starts.
  * @property {Boolean} [options.splitHashDataForPost]
  *      First occurrence of '#' in the options.url is used to split URL
  *      and the latter part is treated as POST data (applies to getImageInfo(...))
@@ -531,7 +531,7 @@ $.TileSource.prototype = {
                 url: url,
                 postData: postData,
                 withCredentials: this.ajaxWithCredentials,
-                headers: this.ajaxHeaders,
+                headers: $.resolveAjaxHeaders(this.ajaxHeaders),
                 success: function( xhr ) {
                     const data = processResponse( xhr );
                     callback( data );

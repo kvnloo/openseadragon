@@ -600,4 +600,78 @@
         assert.equal(imageLoader.failedTiles.length, 0, 'close() drops tiles waiting for a retry.');
     });
 
+    // ----------
+
+    QUnit.test('ImageJob keeps the legacy request and third-argument type', function(assert) {
+        const request = new XMLHttpRequest();
+        const data = new Blob(['legacy']);
+        let callbacks = 0;
+        const job = new OpenSeadragon.ImageJob({
+            callback: function() { callbacks++; }
+        });
+
+        job.prepareForBatch();
+        job.finish(data, request, 'rasterBlob');
+
+        assert.strictEqual(job.data, data, 'Data is retained');
+        assert.strictEqual(job.request, request, 'Legacy request remains accessible');
+        assert.strictEqual(job.dataType, 'rasterBlob', 'Third argument sets the type');
+        assert.strictEqual(callbacks, 1, 'The job completes once');
+    });
+
+    // ----------
+
+    QUnit.test('ImageJob accepts the two-argument data and type signature', function(assert) {
+        const data = new Blob(['type-only']);
+        let callbacks = 0;
+        const job = new OpenSeadragon.ImageJob({
+            callback: function() { callbacks++; }
+        });
+
+        job.prepareForBatch();
+        job.finish(data, 'rasterBlob');
+
+        assert.strictEqual(job.data, data, 'Data is retained');
+        assert.strictEqual(job.request, null, 'A type string is not mistaken for a request');
+        assert.strictEqual(job.dataType, 'rasterBlob', 'Second argument sets the type');
+        assert.strictEqual(callbacks, 1, 'The job completes once');
+    });
+
+    // ----------
+
+    QUnit.test('ImageJob ignores completion calls after either terminal result', function(assert) {
+        const successData = new Blob(['first']);
+        let successCallbacks = 0;
+        const succeeded = new OpenSeadragon.ImageJob({
+            callback: function() { successCallbacks++; }
+        });
+
+        succeeded.prepareForBatch();
+        succeeded.finish(successData, null, 'image');
+        succeeded.fail('late failure', new XMLHttpRequest());
+        succeeded.finish(new Blob(['late']), 'rasterBlob');
+
+        assert.strictEqual(successCallbacks, 1, 'A successful job calls back once');
+        assert.strictEqual(succeeded.data, successData, 'Late terminal calls do not replace data');
+        assert.strictEqual(succeeded.dataType, 'image', 'Late terminal calls do not replace the type');
+        assert.strictEqual(succeeded.errorMsg, null, 'Late failure does not replace success');
+
+        const request = new XMLHttpRequest();
+        let failureCallbacks = 0;
+        const failed = new OpenSeadragon.ImageJob({
+            callback: function() { failureCallbacks++; }
+        });
+
+        failed.prepareForBatch();
+        failed.fail('first failure', request);
+        failed.fail('late failure', request);
+        failed.finish(new Blob(['late']), 'rasterBlob');
+
+        assert.strictEqual(failureCallbacks, 1, 'A failed job calls back once');
+        assert.strictEqual(failed.data, null, 'Late success does not replace failure data');
+        assert.strictEqual(failed.dataType, null, 'Late success does not replace failure type');
+        assert.strictEqual(failed.errorMsg, 'first failure', 'The original error is retained');
+        assert.strictEqual(failed.request, request, 'The original failed request is retained');
+    });
+
 })();

@@ -223,17 +223,23 @@ $.ImageJob.prototype = {
 
     /**
      * Finish this job. Should be called unless abort() was executed upon successful data retrieval.
-     *   Usage: context.finish(data, request, dataType=undefined). Pass the downloaded data object
-     *   add also reference to an ajax request if used. Optionally, specify what data type the data is.
+     *   Usage: context.finish(data, request, dataType) or context.finish(data, dataType).
+     *   The legacy request object is preserved for consumers that inspect the completed job.
      * @param {*} data data that has been downloaded
-     * @param {XMLHttpRequest} request reference to the request if used
-     * @param {string} dataType data type identifier
+     * @param {XMLHttpRequest|string} [request] request reference, or data type for the two-argument form
+     * @param {string} [dataType] data type identifier in the three-argument form
      *   fallback compatibility behavior: dataType treated as errorMessage if data is falsey value
      * @memberof OpenSeadragon.ImageJob#
      */
     finish: function(data, request, dataType) {
         if (!this.jobId) {
             return;
+        }
+        // A string in the second position denotes the new type-only signature.
+        // A request object and third-argument type keep the legacy contract.
+        if (typeof request === 'string' && dataType === undefined) {
+            dataType = request;
+            request = null;
         }
         // old behavior, no deprecation due to possible finish calls with invalid data item (e.g. different error)
         if (isInvalidData(data)) {
