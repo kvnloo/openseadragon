@@ -103,28 +103,28 @@
                 initial: 0, target: 0.2, exponential: false,
                 stiffness: defaults.springStiffness, pixel: panPixel,
                 unchangedActive: 38, unchangedAll: 39,
-                terminalActive: 15, lastMovingTick: 59
+                terminalActive: 15, lastMovingTick: 59, finalStepPixels: 0
             },
             {
                 name: 'pan / near-linear control',
                 initial: 0, target: 0.2, exponential: false,
                 stiffness: 0.000001, pixel: panPixel,
                 unchangedActive: 0, unchangedAll: 0,
-                terminalActive: 0, lastMovingTick: 74
+                terminalActive: 0, lastMovingTick: 74, finalStepPixels: 1
             },
             {
                 name: 'zoom / default ease-out (exponential)',
                 initial: 1, target: 2, exponential: true,
                 stiffness: defaults.springStiffness, pixel: zoomPixel,
                 unchangedActive: 34, unchangedAll: 35,
-                terminalActive: 13, lastMovingTick: 61
+                terminalActive: 13, lastMovingTick: 61, finalStepPixels: 0
             },
             {
                 name: 'zoom / near-linear control (exponential)',
                 initial: 1, target: 2, exponential: true,
                 stiffness: 0.000001, pixel: zoomPixel,
                 unchangedActive: 0, unchangedAll: 0,
-                terminalActive: 0, lastMovingTick: 74
+                terminalActive: 0, lastMovingTick: 74, finalStepPixels: 2
             }
         ];
 
@@ -181,7 +181,8 @@
                 config.name + ': consecutive unchanged active tail updates');
             assert.strictEqual(lastMovingTick, config.lastMovingTick,
                 config.name + ': last active update moving a pixel');
-            assert.ok(lastStepPixels <= 2, config.name + ': no large final-step pixel jump');
+            assert.strictEqual(lastStepPixels, config.finalStepPixels,
+                config.name + ': last-step pixel motion (no stopping tolerance)');
         });
     });
 
