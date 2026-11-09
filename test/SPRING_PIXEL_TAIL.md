@@ -13,12 +13,12 @@ viewer settings at base `36b92d228b121f5fa4c933aa5bb3d5eb10859e05`
 are `springStiffness=6.5` and `animationTime=1.2` seconds. The near-linear
 control changes **only** stiffness to `0.000001`.
 
-| Projection / easing | Active updates | Unchanged active | Unchanged incl. final | Consecutive unchanged active tail | Last pixel-moving active tick |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Pan, default ease-out (6.5) | 74 | 38 | 39 | 15 | 59 (944 ms) |
-| Pan, near-linear (0.000001) | 74 | 0 | 0 | 0 | 74 (1184 ms) |
-| Zoom, default ease-out (6.5, exponential) | 74 | 34 | 35 | 13 | 61 (976 ms) |
-| Zoom, near-linear (0.000001, exponential) | 74 | 0 | 0 | 0 | 74 (1184 ms) |
+| Projection / easing | Active updates | Unchanged active | Unchanged incl. final | Consecutive unchanged active tail | Last pixel-moving active tick | Final step (CSS px) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Pan, default ease-out (6.5) | 74 | 38 | 39 | 15 | 59 (944 ms) | 0 |
+| Pan, near-linear (0.000001) | 74 | 0 | 0 | 0 | 74 (1184 ms) | 1 |
+| Zoom, default ease-out (6.5, exponential) | 74 | 34 | 35 | 13 | 61 (976 ms) | 0 |
+| Zoom, near-linear (0.000001, exponential) | 74 | 0 | 0 | 0 | 74 (1184 ms) | 2 |
 
 These are **formula-derived fixture expectations, not executed test results**.
 For tick `n = 0..75` and stiffness `s`, define
