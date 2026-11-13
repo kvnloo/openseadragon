@@ -471,4 +471,113 @@
         viewer.open({tileSource: '/test/data/testpattern.dzi'});
     });
 
+    // ----------
+
+    // These held, no-I/O jobs exercise the ImageLoader booking path rather than
+    // scheduler.noteStart directly. Both jobs stay in flight until the test releases them.
+    function heldOriginPair(firstUrl, secondUrl, sharedImage) {
+        scheduler.reset();
+        const loader = new OpenSeadragon.ImageLoader({
+            jobLimit: 4,
+            tileRetryMax: 0
+        });
+        const source = MockSeadragon.getTileSource();
+        const held = [];
+
+        source.downloadTileStart = function(job) {
+            held.push(job);
+        };
+        source.downloadTileAbort = function() {};
+
+        function makeImage(url) {
+            const image = {
+                serverProtocol: 'h2',
+                _schedulerOrigin: null,
+                _imageLoader: loader
+            };
+            scheduler.register(image);
+            scheduler.assignOrigin(image, url);
+            return image;
+        }
+
+        const firstImage = makeImage(firstUrl);
+        const secondImage = sharedImage ? firstImage : makeImage(secondUrl);
+
+        function add(url, image) {
+            loader.addJob({
+                src: url,
+                tile: { tiledImage: image },
+                source: source,
+                loadWithAjax: false,
+                crossOriginPolicy: false,
+                ajaxWithCredentials: false,
+                abort: function() {},
+                callback: function() {}
+            });
+        }
+
+        add(firstUrl, firstImage);
+        add(secondUrl, secondImage);
+
+        return {
+            held: held,
+            release: function() {
+                held.forEach(function(job) {
+                    // ImageJob.fail ignores already-completed jobs.
+                    job.fail('test cleanup', null);
+                });
+                scheduler.reset();
+            }
+        };
+    }
+
+    QUnit.test('scheduled jobs use each tile URL origin, including CDN shards', function(assert) {
+        const a = 'https://a.example.test';
+        const b = 'https://b.example.test';
+
+        let pair = heldOriginPair(a + '/0.jpg', a + '/1.jpg', true);
+        try {
+            assert.strictEqual(pair.held.length, 2, 'Both same-origin requests are held.');
+            assert.deepEqual([scheduler.inFlightFor(a), scheduler.inFlightFor(b)],
+                [2, 0], 'Two jobs on the same origin share its bucket.');
+        } finally {
+            pair.release();
+        }
+
+        pair = heldOriginPair(a + '/0.jpg', b + '/1.jpg', true);
+        try {
+            assert.strictEqual(pair.held.length, 2, 'Both sharded requests are held.');
+            assert.deepEqual([scheduler.inFlightFor(a), scheduler.inFlightFor(b)],
+                [1, 1], 'One image with two URL origins must book two buckets.');
+        } finally {
+            pair.release();
+        }
+
+        pair = heldOriginPair(a + '/0.jpg', b + '/1.jpg', false);
+        try {
+            assert.strictEqual(pair.held.length, 2, 'Both separate-image requests are held.');
+            assert.deepEqual([scheduler.inFlightFor(a), scheduler.inFlightFor(b)],
+                [1, 1], 'Separate images provide the positive control.');
+        } finally {
+            pair.release();
+        }
+    });
+
+    QUnit.test('sharded job completion frees the matching origin only', function(assert) {
+        const a = 'https://a.example.test';
+        const b = 'https://b.example.test';
+        const pair = heldOriginPair(a + '/0.jpg', b + '/1.jpg', true);
+        try {
+            assert.strictEqual(pair.held.length, 2, 'Both sharded requests are held.');
+            pair.held[0].finish({}, null, 'image');
+            assert.deepEqual([scheduler.inFlightFor(a), scheduler.inFlightFor(b)],
+                [0, 1], 'Completing A must leave only B booked.');
+            pair.held[1].finish({}, null, 'image');
+            assert.deepEqual([scheduler.inFlightFor(a), scheduler.inFlightFor(b)],
+                [0, 0], 'Both completed jobs leave no reservations.');
+        } finally {
+            pair.release();
+        }
+    });
+
 })();
