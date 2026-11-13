@@ -427,7 +427,7 @@
         // say - so the release must not need the image any more.
         const tile = {tiledImage: {serverProtocol: 'h2', _schedulerOrigin: origin}};
         viewer.imageLoader.addJob({
-            src: 'test',
+            src: origin + '/tile.png',
             tile: tile,
             source: source,
             loadWithAjax: false,
@@ -577,6 +577,175 @@
                 [0, 0], 'Both completed jobs leave no reservations.');
         } finally {
             pair.release();
+        }
+    });
+
+
+    // ----------
+
+    QUnit.test('secondary shards inherit the image protocol and loader cap', function(assert) {
+        const a = 'https://a.example.test';
+        const b = 'https://b.example.test';
+        const image = {serverProtocol: 'h2', _schedulerOrigin: null, _imageLoader: {jobLimit: 0}};
+        scheduler.register(image);
+        scheduler.assignOrigin(image, a + '/0.jpg');
+        scheduler.assignOrigin(image, b + '/1.jpg');
+
+        assert.strictEqual(image._schedulerOrigin, a, 'The first origin remains available to legacy callers.');
+        assert.equal(scheduler.limitFor(a), 24, 'The first shard uses the explicit HTTP/2 ceiling.');
+        assert.equal(scheduler.limitFor(b), 24, 'The second shard uses the same HTTP/2 ceiling.');
+        assert.equal(scheduler.budgetFor(b), 24, 'The second shard is not left on the unknown-origin budget.');
+
+        image._imageLoader.jobLimit = 3;
+        scheduler._invalidateLimits();
+        assert.equal(scheduler.limitFor(a), 3, 'The shared loader cap applies on the first shard.');
+        assert.equal(scheduler.limitFor(b), 3, 'The shared loader cap also applies on the second shard.');
+    });
+
+    QUnit.test('protocol discovery continues for every unresolved shard', function(assert) {
+        const a = 'https://a.example.test';
+        const b = 'https://b.example.test';
+        const image = {serverProtocol: 'auto', _schedulerOrigin: null, _imageLoader: {jobLimit: 0}};
+        scheduler.register(image);
+        scheduler.assignOrigin(image, a + '/0.jpg');
+        scheduler.assignOrigin(image, b + '/1.jpg');
+
+        scheduler.noteProtocol(b, 'h2');
+        assert.ok(scheduler._needsDetection(), 'Resolving B cannot forget that A still needs detection.');
+        scheduler.noteProtocol(a, 'http/1.1');
+        assert.notOk(scheduler._needsDetection(), 'Detection ends after both origins are resolved.');
+        assert.equal(scheduler.limitFor(a), 6, 'Detected HTTP/1.1 applies only to A.');
+        assert.equal(scheduler.limitFor(b), 24, 'Detected HTTP/2 applies only to B.');
+    });
+
+    QUnit.test('queued shard cannot block a dispatchable tile on another origin', function(assert) {
+        const a = 'https://a.example.test';
+        const b = 'https://b.example.test';
+        const held = [];
+        const loader = new OpenSeadragon.ImageLoader({jobLimit: 0, tileRetryMax: 0});
+        const source = MockSeadragon.getTileSource();
+        source.downloadTileStart = function(job) { held.push(job); };
+        source.downloadTileAbort = function() {};
+
+        const image = {
+            serverProtocol: 'http/1.1',
+            _schedulerOrigin: null,
+            _imageLoader: loader,
+            _wishList: [],
+            _wishListTime: 0,
+            _pathDispatched: 0,
+            _loadTile: function(tile, time, src) {
+                tile.loading = true;
+                add(src, tile);
+            }
+        };
+        function add(src, tile) {
+            // Assign ownership only when submitting: a candidate still in the wish list must not
+            // point back to its image, since ImageJob deep-copies job options.
+            tile.tiledImage = image;
+            loader.addJob({
+                src: src, tile: tile, source: source, loadWithAjax: false,
+                crossOriginPolicy: false, ajaxWithCredentials: false,
+                abort: function() {},
+                callback: function() { tile.loading = false; }
+            });
+        }
+        function candidate(src) {
+            return {
+                loaded: false, loading: false, inLoadArea: true,
+                getUrl: function() { return src; }
+            };
+        }
+
+        scheduler.register(image);
+        try {
+            for (let i = 0; i < 6; i++) {
+                add(a + '/' + i + '.jpg', candidate(a + '/' + i + '.jpg'));
+            }
+            const blocked = candidate(a + '/blocked.jpg');
+            const free = candidate(b + '/free.jpg');
+            image._wishList.push(blocked, free);
+            scheduler.pump();
+
+            assert.equal(held.length, 7, 'Six A jobs and one B job have been dispatched.');
+            assert.deepEqual([scheduler.inFlightFor(a), scheduler.inFlightFor(b)],
+                [6, 1], 'A stays capped at six while B uses an independent slot.');
+            assert.strictEqual(image._wishList.length, 1, 'The saturated A candidate is retained.');
+            assert.strictEqual(image._wishList[0], blocked, 'The exact blocked tile stays eligible later.');
+            assert.ok(free.loading, 'The B tile was dispatched despite the blocked A tile.');
+        } finally {
+            image._wishList.length = 0;
+            held.forEach(function(job) { job.fail('test cleanup', null); });
+            scheduler.reset();
+        }
+    });
+
+    QUnit.test('relative and opaque URLs book their own per-job origin', function(assert) {
+        const a = 'https://a.example.test';
+        const held = [];
+        const loader = new OpenSeadragon.ImageLoader({jobLimit: 4, tileRetryMax: 0});
+        const source = MockSeadragon.getTileSource();
+        source.downloadTileStart = function(job) { held.push(job); };
+        source.downloadTileAbort = function() {};
+        const image = {serverProtocol: 'h2', _schedulerOrigin: a, _imageLoader: loader};
+        scheduler.register(image);
+
+        function add(src) {
+            loader.addJob({
+                src: src, tile: {tiledImage: image}, source: source, loadWithAjax: false,
+                crossOriginPolicy: false, ajaxWithCredentials: false,
+                abort: function() {}, callback: function() {}
+            });
+        }
+
+        try {
+            add('/test/data/testpattern.dzi');
+            add('data:image/png;base64,AAAA');
+            assert.equal(scheduler.inFlightFor(a), 0, 'Neither job belongs to the first image origin.');
+            assert.equal(scheduler.inFlightFor(window.location.origin), 1, 'The relative URL uses the page origin.');
+            assert.equal(scheduler.inFlightFor('*'), 1, 'The opaque URL uses the shared fallback pool.');
+        } finally {
+            held.forEach(function(job) { job.fail('test cleanup', null); });
+            assert.equal(scheduler.inFlightFor(window.location.origin), 0, 'The relative URL slot is released.');
+            assert.equal(scheduler.inFlightFor('*'), 0, 'The opaque URL slot is released.');
+            scheduler.reset();
+        }
+    });
+
+    QUnit.test('retry and abort release the same shard after tile teardown', function(assert) {
+        const a = 'https://a.example.test';
+        const b = 'https://b.example.test';
+        const held = [];
+        const loader = new OpenSeadragon.ImageLoader({
+            jobLimit: 4, tileRetryMax: 1, tileRetryDelay: 0
+        });
+        const source = MockSeadragon.getTileSource();
+        source.downloadTileStart = function(job) { held.push(job); };
+        source.downloadTileAbort = function() {};
+        const image = {serverProtocol: 'h2', _schedulerOrigin: a, _imageLoader: loader};
+        scheduler.register(image);
+        const tile = {tiledImage: image};
+
+        try {
+            loader.addJob({
+                src: b + '/retry.jpg', tile: tile, source: source, loadWithAjax: false,
+                crossOriginPolicy: false, ajaxWithCredentials: false,
+                abort: function() {}, callback: function() {}
+            });
+            assert.deepEqual([scheduler.inFlightFor(a), scheduler.inFlightFor(b)],
+                [0, 1], 'The first attempt is booked against B, not A.');
+            held[0].fail('retry once', null);
+            assert.equal(held.length, 2, 'The failed job starts exactly one retry.');
+            assert.deepEqual([scheduler.inFlightFor(a), scheduler.inFlightFor(b)],
+                [0, 1], 'Retry reacquires the same B reservation.');
+
+            tile.tiledImage = null;
+            held[1].abort('cancel retry');
+            assert.deepEqual([scheduler.inFlightFor(a), scheduler.inFlightFor(b)],
+                [0, 0], 'Abort releases B without looking at the detached tile.');
+        } finally {
+            held.forEach(function(job) { job.fail('test cleanup', null); });
+            scheduler.reset();
         }
     });
 

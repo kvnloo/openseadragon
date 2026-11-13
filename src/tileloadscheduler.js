@@ -193,20 +193,35 @@ $.TileLoadScheduler.prototype = {
     },
 
     /**
-     * Record which origin an image's tiles come from, learned from its first dispatched tile. This is also
-     * the first moment protocol detection has anything to look for.
+     * Remember every origin used by an image, not just its first one. The first origin remains available
+     * on _schedulerOrigin for existing callers, while capacity and protocol checks use the entire set.
      * @private
      * @param {OpenSeadragon.TiledImage} tiledImage
-     * @param {String} url of the tile being dispatched
+     * @param {String} url of a candidate or dispatched tile
+     * @returns {String} the origin belonging to this URL
      */
     assignOrigin: function(tiledImage, url) {
-        tiledImage._schedulerOrigin = this.originOf(url);
-        // The image leaves the shared bucket, so both budgets change.
+        const origin = this.originOf(url);
+        if (!tiledImage._schedulerOrigins) {
+            tiledImage._schedulerOrigins = new Set();
+            if (tiledImage._schedulerOrigin) {
+                tiledImage._schedulerOrigins.add(tiledImage._schedulerOrigin);
+            }
+        }
+        if (tiledImage._schedulerOrigins.has(origin)) {
+            return origin;
+        }
+        tiledImage._schedulerOrigins.add(origin);
+        if (tiledImage._schedulerOrigin === null || tiledImage._schedulerOrigin === undefined) {
+            tiledImage._schedulerOrigin = origin;
+        }
+        // An image leaving the shared bucket, or finding another shard, changes both limits.
         this._invalidateLimit(FALLBACK_ORIGIN);
-        this._invalidateLimit(tiledImage._schedulerOrigin);
+        this._invalidateLimit(origin);
         if (this._needsDetection()) {
             this._startObserving();
         }
+        return origin;
     },
 
     /**
@@ -351,7 +366,7 @@ $.TileLoadScheduler.prototype = {
         let limit = Infinity;
         for (const image of this._images) {
             // Before its first tile is dispatched an image has no known origin and draws on the shared budget.
-            if ((image._schedulerOrigin || FALLBACK_ORIGIN) !== origin) {
+            if (!this._imageUsesOrigin(image, origin)) {
                 continue;
             }
 
@@ -444,33 +459,46 @@ $.TileLoadScheduler.prototype = {
             return false;
         }
 
-        const record = this._recordFor(image._schedulerOrigin);
-        if (record.inFlight >= this.budgetFor(image._schedulerOrigin)) {
-            // Remembered for the controller: growing the budget only makes sense if it was actually used up.
-            record.saturated = true;
-            return false;
-        }
-
-        while (wishList.length) {
-            const tile = wishList[0];
-            // Destination tiles are ranked ahead of tiles merely on the animation path, so the first path
-            // tile marks the end of the destination. Path tiles are stale a few frames later; they get one
-            // dispatch per frame, enough to keep a pan from going blank, not enough to flood the origin.
+        // A single tiled image may span CDN shards. The first candidate can be at capacity while a
+        // lower-ranked tile from a different origin still has room, so look for the first eligible tile
+        // without dropping blocked candidates from this frame's list.
+        for (let i = 0; i < wishList.length;) {
+            const tile = wishList[i];
+            // Only one animation-path tile per frame, even when destination tiles are blocked.
             if (tile && tile.inLoadArea === false && image._pathDispatched >= 1) {
                 return false;
             }
-            wishList.shift();
-            // The list was built before the most recent completions landed, so a tile in it may already
-            // have been satisfied elsewhere.
-            if (tile && !tile.loaded && !tile.loading) {
-                if (tile.inLoadArea === false) {
-                    image._pathDispatched++;
-                }
-                image._loadTile(tile, image._wishListTime);
-                return true;
+            if (!tile || tile.loaded || tile.loading) {
+                wishList.splice(i, 1);
+                continue;
             }
+
+            // Use this same URL for dispatch. A custom getTileUrl may have side effects or vary on
+            // each call; checking the budget must not silently target a different request.
+            const src = tile.getUrl();
+            const origin = this.assignOrigin(image, src);
+            const record = this._recordFor(origin);
+            if (record.inFlight >= this.budgetFor(origin)) {
+                record.saturated = true;
+                i++;
+                continue;
+            }
+
+            wishList.splice(i, 1);
+            if (tile.inLoadArea === false) {
+                image._pathDispatched++;
+            }
+            image._loadTile(tile, image._wishListTime, src);
+            return true;
         }
         return false;
+    },
+
+    // private
+    _imageUsesOrigin: function(image, origin) {
+        return image._schedulerOrigins ?
+            image._schedulerOrigins.has(origin) :
+            (image._schedulerOrigin || FALLBACK_ORIGIN) === origin;
     },
 
     // private
@@ -479,7 +507,7 @@ $.TileLoadScheduler.prototype = {
     _hasStatedProtocol: function(origin) {
         origin = origin || FALLBACK_ORIGIN;
         for (const image of this._images) {
-            if ((image._schedulerOrigin || FALLBACK_ORIGIN) === origin && this.normalizeProtocol(image.serverProtocol)) {
+            if (this._imageUsesOrigin(image, origin) && this.normalizeProtocol(image.serverProtocol)) {
                 return true;
             }
         }
@@ -539,13 +567,18 @@ $.TileLoadScheduler.prototype = {
     // watching resource timing, which otherwise costs a callback for every resource the page loads.
     _needsDetection: function() {
         for (const image of this._images) {
-            const origin = image._schedulerOrigin;
-            if (!origin || origin === FALLBACK_ORIGIN || this.normalizeProtocol(image.serverProtocol)) {
+            if (this.normalizeProtocol(image.serverProtocol)) {
                 continue;
             }
-            const record = this._origins.get(origin);
-            if (!record || (record.protocol === null && record.probes < MAX_PROTOCOL_PROBES)) {
-                return true;
+            const origins = image._schedulerOrigins || [image._schedulerOrigin];
+            for (const origin of origins) {
+                if (!origin || origin === FALLBACK_ORIGIN) {
+                    continue;
+                }
+                const record = this._origins.get(origin);
+                if (!record || (record.protocol === null && record.probes < MAX_PROTOCOL_PROBES)) {
+                    return true;
+                }
             }
         }
         return false;

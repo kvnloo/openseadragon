@@ -810,11 +810,12 @@ function _bookOrigin(job) {
         return;
     }
     const image = job.tile && job.tile.tiledImage;
-    if (!image || !image.serverProtocol || !image._schedulerOrigin) {
+    if (!image || !image.serverProtocol) {
         return;
     }
-    // Kept on the job: the tile may be unloaded, and its tiledImage cleared, before the request completes.
-    job._schedulerOrigin = image._schedulerOrigin;
+    // A tiled image can load from multiple CDN origins. Retain the URL-derived origin on the job:
+    // the tile may be unloaded, and its tiledImage cleared, before finish, abort or retry.
+    job._schedulerOrigin = $.tileLoadScheduler.assignOrigin(image, job.src);
     job._originBooked = true;
     job._bookedAt = $.now();
     job._concurrency = $.tileLoadScheduler.noteStart(job._schedulerOrigin);

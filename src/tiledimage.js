@@ -242,7 +242,7 @@ $.TiledImage = function( options ) {
         // Tiles merely on the animation path dispatched from the current wish list; the scheduler allows
         // one per frame.
         _pathDispatched:                   0,
-        // The origin this image's tiles come from; discovered from the first tile actually dispatched.
+        // The first discovered tile origin, retained for compatibility; _schedulerOrigins tracks all shards.
         _schedulerOrigin:                  null,
         // How many requests that origin may carry, refreshed once per frame by _updateLevelsForViewport().
         // 0 until the first frame has run, which is also the first moment there is anything to dispatch.
@@ -2358,16 +2358,16 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
      * @private
      * @param {OpenSeadragon.Tile} tile
      * @param {Number} time
+     * @param {String} [src] Tile URL already checked by the scheduler; reused for the job
      */
-    _loadTile: function(tile, time ) {
+    _loadTile: function(tile, time, src) {
         const _this = this;
         tile.loading = true;
         tile.tiledImage = this;
 
-        // getUrl() may call into user code, so it is read once and the origin taken from the result rather
-        // than asked for again. The first tile is what tells us which budget this image draws on.
-        const src = tile.getUrl();
-        if (this.serverProtocol && this._schedulerOrigin === null) {
+        // Use the scheduler's chosen URL when supplied; a custom getter may change on repeated calls.
+        src = src === undefined ? tile.getUrl() : src;
+        if (this.serverProtocol) {
             $.tileLoadScheduler.assignOrigin(this, src);
         }
 
