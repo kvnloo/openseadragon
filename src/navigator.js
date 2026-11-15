@@ -290,6 +290,13 @@ $.Navigator = function( options ){
 
 $.extend( $.Navigator.prototype, $.EventSource.prototype, $.Viewer.prototype, /** @lends OpenSeadragon.Navigator.prototype */{
 
+    // The Navigator listens on its own element; its inherited outer tracker is unused.
+    setMouseNavEnabled: function( enabled ) {
+        this.innerTracker.setTracking( enabled );
+        this.raiseEvent( 'mouse-enabled', { enabled: enabled } );
+        return this;
+    },
+
     /**
      * Used to notify the navigator when its size has changed. Especially useful when the navigator is resizable.
      * @function
