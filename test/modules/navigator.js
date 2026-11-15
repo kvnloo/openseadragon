@@ -50,6 +50,32 @@
         }
     });
 
+    QUnit.test('Navigator mouse navigation only toggles its input tracker', function(assert) {
+        viewer = OpenSeadragon({
+            id: 'example',
+            showNavigator: true,
+            showNavigationControl: false
+        });
+        const navigator = viewer.navigator;
+        const events = [];
+        navigator.addHandler('mouse-enabled', function(event) {
+            events.push(event.enabled);
+        });
+
+        assert.ok(navigator.isMouseNavEnabled(), 'Navigator starts with pointer input enabled');
+        assert.notOk(navigator.outerTracker.isTracking(), 'Unused container tracker starts disabled');
+
+        assert.strictEqual(navigator.setMouseNavEnabled(false), navigator, 'Toggle is chainable');
+        assert.notOk(navigator.isMouseNavEnabled(), 'Disabling stops navigator pointer input');
+        assert.notOk(navigator.outerTracker.isTracking(), 'Container tracker remains disabled');
+
+        navigator.setMouseNavEnabled(true);
+        assert.ok(navigator.isMouseNavEnabled(), 'Re-enabling restores navigator pointer input');
+        assert.notOk(navigator.outerTracker.isTracking(), 'Re-enabling does not activate the container tracker');
+        assert.ok(viewer.isMouseNavEnabled(), 'Parent viewer pointer input is unaffected');
+        assert.deepEqual(events, [false, true], 'Both toggles fire mouse-enabled events');
+    });
+
     const assessNavigatorLocation = function (assert, expectedX, expectedY) {
         navigatorElement = navigatorElement || $(".navigator");
         Util.assessNumericValue(assert, navigatorElement.offset().left, expectedX, 10, ' Navigator x Position');
