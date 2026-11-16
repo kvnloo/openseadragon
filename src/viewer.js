@@ -2149,7 +2149,11 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
                 options.ajaxWithCredentials = this.ajaxWithCredentials;
             }
             if (options.loadTilesWithAjax === undefined) {
-                options.loadTilesWithAjax = this.loadTilesWithAjax;
+                options.loadTilesWithAjax = options.tileSource.loadTilesWithAjax !== undefined ?
+                    options.tileSource.loadTilesWithAjax : this.loadTilesWithAjax;
+            }
+            if (options.ajaxHeaders === undefined && $.isPlainObject(options.tileSource.ajaxHeaders)) {
+                options.ajaxHeaders = options.tileSource.ajaxHeaders;
             }
             if (!$.isPlainObject(options.ajaxHeaders)) {
                 options.ajaxHeaders = {};
