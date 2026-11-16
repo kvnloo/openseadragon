@@ -3687,10 +3687,7 @@ function onCanvasClick( event ) {
     if ( !haveKeyboardFocus ) {
         this.canvas.focus();
     }
-    if(this.viewport.flipped){
-        event.position.x = this.viewport.getContainerSize().x - event.position.x;
-    }
-
+    // pointFromPixel handles the visual flip; keep tracker positions in canvas pixels.
     const canvasClickEventArgs = {
         tracker: event.eventSource,
         position: event.position,
@@ -4308,10 +4305,7 @@ function onCanvasScroll( event ) {
          this.raiseEvent('canvas-scroll', canvasScrollEventArgs );
 
         if ( !canvasScrollEventArgs.preventDefaultAction && this.viewport ) {
-            if(this.viewport.flipped){
-                event.position.x = this.viewport.getContainerSize().x - event.position.x;
-            }
-
+            // pointFromPixel handles the visual flip without mutating the event.
             gestureSettings = this.gestureSettingsByDeviceType( event.pointerType );
             if ( gestureSettings.scrollToZoom ) {
                 if ( allowPageScroll ) {

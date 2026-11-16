@@ -465,7 +465,8 @@ $.Viewport.prototype = {
             return centerTarget;
         }
 
-        const oldZoomPixel = this.pixelFromPoint(this.zoomPoint, true);
+        // Zoom anchoring uses logical pixels; the presentation flip is not part of spring geometry.
+        const oldZoomPixel = this._pixelFromPoint(this.zoomPoint, this.getBoundsNoRotate(true));
 
         const zoom    = this.getZoom();
         const width   = 1.0 / zoom;
@@ -1205,9 +1206,10 @@ $.Viewport.prototype = {
     // private
     _adjustCenterSpringsForZoomPoint: function(zoomSpringHandler) {
         if (this.zoomPoint) {
-            const oldZoomPixel = this.pixelFromPoint(this.zoomPoint, true);
+            // Zoom anchoring uses logical pixels; the presentation flip is not part of spring geometry.
+            const oldZoomPixel = this._pixelFromPoint(this.zoomPoint, this.getBoundsNoRotate(true));
             zoomSpringHandler();
-            const newZoomPixel = this.pixelFromPoint(this.zoomPoint, true);
+            const newZoomPixel = this._pixelFromPoint(this.zoomPoint, this.getBoundsNoRotate(true));
 
             const deltaZoomPixels = newZoomPixel.minus(oldZoomPixel);
             const deltaZoomPoints = this.deltaPointsFromPixels(
@@ -1303,7 +1305,8 @@ $.Viewport.prototype = {
      * @returns {OpenSeadragon.Point}
      */
     pixelFromPoint: function(point, current) {
-        return this._pixelFromPoint(point, this.getBoundsNoRotate(current));
+        const pixel = this._pixelFromPoint(point, this.getBoundsNoRotate(current));
+        return this.flipped ? new $.Point(this.containerSize.x - pixel.x, pixel.y) : pixel;
     },
 
     // private
@@ -1352,6 +1355,9 @@ $.Viewport.prototype = {
      * @returns {OpenSeadragon.Point}
      */
     pointFromPixel: function(pixel, current) {
+        if (this.flipped) {
+            pixel = new $.Point(this.containerSize.x - pixel.x, pixel.y);
+        }
         return this.pointFromPixelNoRotate(pixel, current).rotate(
             -this.getRotation(current),
             this.getCenter(current)
@@ -1630,10 +1636,15 @@ $.Viewport.prototype = {
      * @returns {OpenSeadragon.Rect} the converted rectangle
      */
     viewerElementToViewportRectangle: function(rectangle) {
+        // Rectangles describe logical geometry. Flipping their summits would
+        // reverse their winding and invalidate the constraint calculations.
+        const rotation = -this.getRotation(true);
+        const center = this.getCenter(true);
+        const fromPixel = pixel => this.pointFromPixelNoRotate(pixel, true).rotate(rotation, center);
         return $.Rect.fromSummits(
-            this.pointFromPixel(rectangle.getTopLeft(), true),
-            this.pointFromPixel(rectangle.getTopRight(), true),
-            this.pointFromPixel(rectangle.getBottomLeft(), true)
+            fromPixel(rectangle.getTopLeft()),
+            fromPixel(rectangle.getTopRight()),
+            fromPixel(rectangle.getBottomLeft())
         );
     },
 
@@ -1644,10 +1655,11 @@ $.Viewport.prototype = {
      * @returns {OpenSeadragon.Rect} the converted rectangle
      */
     viewportToViewerElementRectangle: function(rectangle) {
+        const bounds = this.getBoundsNoRotate(true);
         return $.Rect.fromSummits(
-            this.pixelFromPoint(rectangle.getTopLeft(), true),
-            this.pixelFromPoint(rectangle.getTopRight(), true),
-            this.pixelFromPoint(rectangle.getBottomLeft(), true)
+            this._pixelFromPoint(rectangle.getTopLeft(), bounds),
+            this._pixelFromPoint(rectangle.getTopRight(), bounds),
+            this._pixelFromPoint(rectangle.getBottomLeft(), bounds)
         );
     },
 

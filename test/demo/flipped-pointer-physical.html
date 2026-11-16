@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Flipped Pointer: Physical Mouse/Touch Verification (#1760)</title>
+    <script src="../../build/openseadragon/openseadragon.js"></script>
+    <style>
+        body { font: 15px system-ui, sans-serif; margin: 20px; }
+        .panels { display: flex; flex-wrap: wrap; gap: 24px; }
+        .panel { width: 480px; max-width: 100%; }
+        .frame { position: relative; width: 100%; height: 360px; border: 1px solid #555; }
+        .viewer { position: absolute; inset: 0; }
+        .target {
+            position: absolute; left: 25%; top: 50%; width: 24px; height: 24px;
+            transform: translate(-50%, -50%); border: 2px solid #f00;
+            border-radius: 50%; pointer-events: none; z-index: 5;
+        }
+        .target::before, .target::after { content: ""; position: absolute; background: #f00; }
+        .target::before { width: 2px; height: 32px; top: -4px; left: 11px; }
+        .target::after { width: 32px; height: 2px; top: 11px; left: -4px; }
+        .status { font-weight: bold; }
+        pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+    </style>
+</head>
+<body>
+    <h1>Physical pointer check: flipped + rotated + margined (#1760)</h1>
+    <p>Click the red target with a real mouse and tap it with a real finger, on
+        each renderer. These are physical-device checks: DOM-dispatched events
+        have <code>isTrusted=false</code> and cannot pass. Neither renderer nor
+        pointer type is counted until it receives a trusted click.</p>
+    <p>Open after <code>npx grunt dev</code> at
+        <code>http://localhost:8000/test/demo/flipped-pointer-physical.html</code>.
+        The image is 1000×1000, centered at (0.5, 0.5), zoom 2, rotation 45°,
+        flipped horizontally, with unequal CSS-pixel margins. The oracle
+        independently undoes flip, margins, zoom, and rotation.</p>
+    <div class="panels">
+        <section class="panel">
+            <h2>Canvas</h2>
+            <div class="frame"><div id="canvas" class="viewer"></div><div class="target"></div></div>
+            <p class="status" id="canvas-status">Mouse: PENDING | Touch: PENDING</p>
+            <pre id="canvas-log" aria-live="polite">Waiting for real input.</pre>
+        </section>
+        <section class="panel">
+            <h2>WebGL</h2>
+            <div class="frame"><div id="webgl" class="viewer"></div><div class="target"></div></div>
+            <p class="status" id="webgl-status">Mouse: PENDING | Touch: PENDING</p>
+            <pre id="webgl-log" aria-live="polite">Waiting for real input.</pre>
+        </section>
+    </div>
+    <script>
+        (function() {
+            'use strict';
+            const source = '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000">' +
+                '<rect width="1000" height="1000" fill="#eee"/>' +
+                '<path d="M250 0V1000 M500 0V1000 M750 0V1000" stroke="#666" stroke-width="4"/>' +
+                '<path d="M0 250H1000 M0 500H1000 M0 750H1000" stroke="#777" stroke-width="4"/>' +
+                '</svg>';
+            const sourceUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(source);
+
+            function configure(kind) {
+                const status = document.getElementById(kind + '-status');
+                const log = document.getElementById(kind + '-log');
+                const checks = { mouse: 'PENDING', touch: 'PENDING' };
+                const viewer = OpenSeadragon({
+                    id: kind,
+                    drawer: kind,
+                    prefixUrl: '../../build/openseadragon/images/',
+                    showNavigationControl: false,
+                    mouseNavEnabled: true
+                });
+
+                viewer.addOnceHandler('open', function() {
+                    if (viewer.drawer.getType() !== kind) {
+                        status.textContent = kind + ' not available: actual drawer is ' + viewer.drawer.getType();
+                        return;
+                    }
+                    const viewport = viewer.viewport;
+                    const center = new OpenSeadragon.Point(0.5, 0.5);
+                    const size = viewport.getContainerSize();
+                    const margins = {
+                        left: size.x / 10,
+                        top: size.y / 8,
+                        right: size.x / 5,
+                        bottom: size.y / 6
+                    };
+                    const innerWidth = size.x - margins.left - margins.right;
+                    const innerHeight = size.y - margins.top - margins.bottom;
+                    viewport.setMargins(margins);
+                    viewport.setRotation(45, true);
+                    viewport.zoomTo(2, null, true);
+                    viewport.panTo(center, true);
+                    viewport.setFlip(true);
+
+                    viewer.addHandler('canvas-click', function(event) {
+                        event.preventDefaultAction = true;
+                        const raw = event.originalEvent;
+                        const type = raw.pointerType || (raw instanceof MouseEvent ? 'mouse' : 'unknown');
+                        const position = event.position;
+                        const actual = viewport.viewerElementToImageCoordinates(position);
+                        // Expected value is computed from raw viewer pixels, without calling Viewport.
+                        const dx = (size.x - position.x - margins.left - innerWidth / 2) / (2 * innerWidth);
+                        const dy = (position.y - margins.top - innerHeight / 2) / (2 * innerWidth);
+                        const expected = new OpenSeadragon.Point(
+                            500 + 1000 * (dx + dy) / Math.SQRT2,
+                            500 + 1000 * (dy - dx) / Math.SQRT2
+                        );
+                        const rect = viewer.canvas.getBoundingClientRect();
+                        const rawPixelError = Math.hypot(
+                            position.x - (raw.clientX - rect.left),
+                            position.y - (raw.clientY - rect.top)
+                        );
+                        const imageError = actual.distanceTo(expected);
+                        const maxImageError = 1000 / (2 * innerWidth);
+                        const trusted = raw.isTrusted === true;
+                        const pass = trusted && event.quick && rawPixelError <= 1 &&
+                            imageError <= maxImageError;
+
+                        if (type === 'mouse' || type === 'touch') {
+                            checks[type] = pass ? 'PASS' : 'FAIL';
+                        }
+                        status.textContent = 'Mouse: ' + checks.mouse + ' | Touch: ' + checks.touch;
+                        log.textContent = (pass ? 'PASS' : 'FAIL') + ' ' + type +
+                            ', trusted=' + trusted + ', quick=' + event.quick +
+                            ', canvas=(' + position.x.toFixed(2) + ', ' + position.y.toFixed(2) + ')' +
+                            ', expected image=(' + expected.x.toFixed(3) + ', ' + expected.y.toFixed(3) + ')' +
+                            ', actual image=(' + actual.x.toFixed(3) + ', ' + actual.y.toFixed(3) + ')' +
+                            ', image error=' + imageError.toFixed(5) +
+                            ', DOM pixel error=' + rawPixelError.toFixed(5) +
+                            '\n' + log.textContent;
+                    });
+                });
+                viewer.addOnceHandler('open-failed', function(event) {
+                    status.textContent = 'Image load failed';
+                    log.textContent = event.message;
+                });
+                viewer.open({ type: 'image', url: sourceUrl, buildPyramid: false });
+            }
+            configure('canvas');
+            configure('webgl');
+        }());
+    </script>
+</body>
+</html>
