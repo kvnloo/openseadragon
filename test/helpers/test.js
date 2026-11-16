@@ -110,6 +110,47 @@
             };
         },
 
+        // Exercise fullscreen UI without making a browser request that requires a trusted gesture.
+        // Simulate only the OpenSeadragon fullscreen adapter; never hide console messages.
+        mockFullScreen: function() {
+            const original = {
+                request: OpenSeadragon.requestFullScreen,
+                exit: OpenSeadragon.exitFullScreen,
+                is: OpenSeadragon.isFullScreen
+            };
+            const calls = {request: 0, exit: 0};
+            let active = false;
+            const notify = function() {
+                document.dispatchEvent(new Event(OpenSeadragon.fullScreenEventName));
+            };
+
+            OpenSeadragon.isFullScreen = function() {
+                return active;
+            };
+            OpenSeadragon.requestFullScreen = function(element) {
+                if (element !== document.body) {
+                    throw new Error('Fullscreen test should request the document body');
+                }
+                calls.request++;
+                active = true;
+                notify();
+            };
+            OpenSeadragon.exitFullScreen = function() {
+                calls.exit++;
+                active = false;
+                notify();
+            };
+
+            return {
+                calls: calls,
+                restore: function() {
+                    OpenSeadragon.requestFullScreen = original.request;
+                    OpenSeadragon.exitFullScreen = original.exit;
+                    OpenSeadragon.isFullScreen = original.is;
+                }
+            };
+        },
+
         // ----------
         spyOnce: function(obj, functionName, callback) {
             const original = obj[functionName];

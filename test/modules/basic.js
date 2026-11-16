@@ -2,6 +2,7 @@
 
 (function() {
     let viewer;
+    let fullscreenMock;
 
     QUnit.module('Basic', {
         beforeEach: function () {
@@ -16,6 +17,10 @@
             });
         },
         afterEach: function () {
+            if (fullscreenMock) {
+                fullscreenMock.restore();
+                fullscreenMock = null;
+            }
             if (viewer){
                 viewer.destroy();
             }
@@ -227,15 +232,16 @@
 
     QUnit.test('FullScreen', function(assert) {
         if (!OpenSeadragon.supportsFullScreen) {
-            const done = assert.async();
             assert.expect(0);
-            done();
             return;
         }
         const timeWatcher = Util.timeWatcher(assert, 7000);
 
-        viewer.addHandler('open', function () {
+        viewer.addHandler('open', function() {
             assert.ok(!OpenSeadragon.isFullScreen(), 'Started out not fullscreen');
+            // The native API requires a trusted user gesture, unavailable to a QUnit test.
+            // Simulate browser fullscreen events while preserving the viewer event assertions.
+            fullscreenMock = Util.mockFullScreen();
 
             const checkEnteringPreFullScreen = (event) => {
                 viewer.removeHandler('pre-full-screen', checkEnteringPreFullScreen);
@@ -247,27 +253,17 @@
                 viewer.removeHandler('full-screen', checkExitingFullScreen);
                 assert.ok(!event.fullScreen, 'Disabling fullscreen');
                 assert.ok(!OpenSeadragon.isFullScreen(), 'Fullscreen disabled');
+                assert.strictEqual(fullscreenMock.calls.exit, 1, 'Requested fullscreen exit once');
                 timeWatcher.done();
-            }
+            };
 
-            // The 'new' headless mode allows us to enter fullscreen, so verify
-            // that we see the correct values returned. We will then close out
-            // of fullscreen to check the same values when exiting.
             const checkAcquiredFullScreen = (event) => {
                 viewer.removeHandler('full-screen', checkAcquiredFullScreen);
+                assert.ok(event.fullScreen, 'Acquired fullscreen');
+                assert.ok(OpenSeadragon.isFullScreen(), 'Fullscreen enabled');
+                assert.strictEqual(fullscreenMock.calls.request, 1, 'Requested fullscreen entry once');
                 viewer.addHandler('full-screen', checkExitingFullScreen);
-
-                // Check if fullscreen was actually acquired (may fail due to browser security policies)
-                if (event.fullScreen && OpenSeadragon.isFullScreen()) {
-                    assert.ok(event.fullScreen, 'Acquired fullscreen');
-                    assert.ok(OpenSeadragon.isFullScreen(), 'Fullscreen enabled');
-                    viewer.setFullScreen(false);
-                } else {
-                    // Fullscreen was blocked by browser security - this is expected in automated tests
-                    assert.ok(true, 'Fullscreen was blocked by browser security (expected in automated tests)');
-                    // Simulate the exit to complete the test
-                    checkExitingFullScreen({fullScreen: false});
-                }
+                viewer.setFullScreen(false);
             };
 
             viewer.addHandler('pre-full-screen', checkEnteringPreFullScreen);
@@ -278,7 +274,7 @@
         viewer.open('/test/data/testpattern.dzi');
     });
 
-    QUnit.test('Close', function(assert) {
+        QUnit.test('Close', function(assert) {
         const done = assert.async();
         viewer.addHandler("open", function () {
             const closeHandler = function() {

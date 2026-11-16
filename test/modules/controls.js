@@ -1,7 +1,8 @@
-/* global QUnit, $, testLog */
+/* global QUnit, $, Util, testLog */
 
 (function () {
     let viewer;
+    let fullscreenMock;
 
     QUnit.module('Controls', {
         beforeEach: function () {
@@ -16,6 +17,10 @@
 
         },
         afterEach: function () {
+            if (fullscreenMock) {
+                fullscreenMock.restore();
+                fullscreenMock = null;
+            }
             if (viewer){
                 viewer.destroy();
             }
@@ -391,11 +396,23 @@
             assert.notEqual(viewer.buttonGroup.buttons.indexOf(viewer.fullPageButton), -1,
                 "The full page button should be present");
 
+            // A programmatic button release is not a trusted gesture. Simulate the
+            // fullscreen adapter without suppressing any browser console messages.
+            if (OpenSeadragon.supportsFullScreen) {
+                fullscreenMock = Util.mockFullScreen();
+            }
+
             assert.ok(!viewer.isFullPage(), "OSD should not be in full page.");
             viewer.fullPageButton.onRelease();
             assert.ok(viewer.isFullPage(), "OSD should be in full page.");
+            if (fullscreenMock) {
+                assert.strictEqual(fullscreenMock.calls.request, 1, 'FullPage control requested fullscreen once');
+            }
             viewer.fullPageButton.onRelease();
             assert.ok(!viewer.isFullPage(), "OSD should not be in full page.");
+            if (fullscreenMock) {
+                assert.strictEqual(fullscreenMock.calls.exit, 1, 'FullPage control exited fullscreen once');
+            }
 
             viewer.close();
             done();
@@ -411,7 +428,7 @@
         viewer.open('/test/data/testpattern.dzi');
     });
 
-    QUnit.test('RotateControlOff', function (assert) {
+        QUnit.test('RotateControlOff', function (assert) {
         const done = assert.async();
         const openHandler = function (event) {
             viewer.removeHandler('open', openHandler);
