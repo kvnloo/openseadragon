@@ -848,4 +848,163 @@
         );
     });
 
+
+    // ----------
+    ['webgl', 'canvas'].forEach(function(drawerType) {
+        QUnit.test('zero-overlap DZI tile placement at 1.99x and 2x (' + drawerType + ')', function(assert) {
+            const done = assert.async();
+
+            // The module fixture defaults to canvas; use a new viewer for each
+            // drawer, so a canvas fallback cannot silently masquerade as WebGL.
+            viewer.destroy();
+            $('#example').css({ width: '512px', height: '512px' });
+            viewer = OpenSeadragon({
+                id: 'example',
+                prefixUrl: '/build/openseadragon/images/',
+                drawer: drawerType,
+                maxZoomPixelRatio: 2,
+                minPixelRatio: 0.5,
+                springStiffness: 100,
+                blendTime: 0,
+                showNavigationControl: false
+            });
+            assert.strictEqual(viewer.drawer.getType(), drawerType,
+                'the requested drawer is in use');
+
+            // Create an actual DZI tile source with zero overlap. Its tiles all
+            // use an existing checked-in image: only geometry, not tile art,
+            // matters here, and all levels can load without another fixture.
+            const dzi = new OpenSeadragon.DziTileSource({
+                width: 1024,
+                height: 1024,
+                tileSize: 256,
+                tileOverlap: 0,
+                tilesUrl: '/test/data/testpattern_files/',
+                fileFormat: 'jpg'
+            });
+            dzi.getTileUrl = function() {
+                return '/test/data/testpattern_files/0/0_0.jpg';
+            };
+
+            function capture(image, ratio) {
+                // Immediate zoom plus a forced update/draw captures one coherent
+                // frame at each ratio rather than two frames mid-animation.
+                viewer.viewport.zoomTo(image.imageToViewportZoom(ratio), null, true);
+                viewer.viewport.update();
+                viewer.world.update(true);
+
+                let captured = null;
+                function onDraw(event) {
+                    if (event.tiledImage === image) {
+                        captured = event.tiles.filter(function(tile) {
+                            return tile.level === image.source.maxLevel;
+                        }).map(function(tile) {
+                            return {
+                                key: tile.x + ',' + tile.y,
+                                x: tile.x,
+                                y: tile.y,
+                                left: tile.position.x,
+                                top: tile.position.y,
+                                width: tile.size.x,
+                                height: tile.size.y
+                            };
+                        });
+                    }
+                }
+
+                viewer.addHandler('tiled-image-drawn', onDraw);
+                viewer.drawer.draw([image]);
+                viewer.removeHandler('tiled-image-drawn', onDraw);
+
+                assert.ok(captured && captured.length >= 4,
+                    drawerType + ' at ' + ratio + 'x drew all four central maximum-level tiles');
+                return captured || [];
+            }
+
+            function checkSeams(tiles, ratio) {
+                const byKey = new Map(tiles.map(function(tile) {
+                    return [tile.key, tile];
+                }));
+                let horizontal = 0;
+                let vertical = 0;
+
+                tiles.forEach(function(tile) {
+                    const right = byKey.get((tile.x + 1) + ',' + tile.y);
+                    const below = byKey.get(tile.x + ',' + (tile.y + 1));
+                    if (right) {
+                        const gap = right.left - (tile.left + tile.width);
+                        assert.ok(Math.abs(gap) < 0.5,
+                            drawerType + ' at ' + ratio + 'x: horizontal seam ' +
+                            tile.key + ' -> ' + right.key + ' = ' + gap.toFixed(3) + ' CSS px');
+                        horizontal++;
+                    }
+                    if (below) {
+                        const gap = below.top - (tile.top + tile.height);
+                        assert.ok(Math.abs(gap) < 0.5,
+                            drawerType + ' at ' + ratio + 'x: vertical seam ' +
+                            tile.key + ' -> ' + below.key + ' = ' + gap.toFixed(3) + ' CSS px');
+                        vertical++;
+                    }
+                });
+
+                assert.ok(horizontal > 0 && vertical > 0,
+                    drawerType + ' at ' + ratio + 'x: tested adjacent tiles in both axes');
+            }
+
+            viewer.addOnceHandler('open', function() {
+                const image = viewer.world.getItemAt(0);
+                assert.strictEqual(image.source.tileOverlap, 0, 'DZI has no overlap');
+                assert.strictEqual(viewer.viewport.maxZoomPixelRatio, 2,
+                    'maximum zoom is two image pixels per CSS pixel');
+
+                // Load the highest-resolution tiles before comparing frames.
+                viewer.viewport.panTo(new OpenSeadragon.Point(0.5, 0.5), true);
+                viewer.viewport.zoomTo(image.imageToViewportZoom(2), null, true);
+                viewer.viewport.update();
+                viewer.world.update(true);
+                viewer.whenFullyLoaded(function() {
+                    const before = capture(image, 1.99);
+                    const after = capture(image, 2);
+                    checkSeams(before, 1.99);
+                    checkSeams(after, 2);
+
+                    const afterByKey = new Map(after.map(function(tile) {
+                        return [tile.key, tile];
+                    }));
+                    const center = viewer.viewport.getContainerSize().divide(2);
+                    const factor = 2 / 1.99;
+                    let shared = 0;
+
+                    before.forEach(function(tile) {
+                        const next = afterByKey.get(tile.key);
+                        assert.ok(next, drawerType + ': max-level tile ' + tile.key +
+                            ' remains drawn across the 2x boundary');
+                        if (!next) {
+                            return;
+                        }
+                        shared++;
+
+                        // A 0.01x zoom legitimately moves tiles; subtract that
+                        // affine scaling around the fixed viewport center. Only
+                        // residual movement >= 0.5 CSS px is a discontinuity.
+                        const expectedLeft = center.x + (tile.left - center.x) * factor;
+                        const expectedTop = center.y + (tile.top - center.y) * factor;
+                        const residual = Math.max(
+                            Math.abs(next.left - expectedLeft),
+                            Math.abs(next.top - expectedTop),
+                            Math.abs(next.width - tile.width * factor),
+                            Math.abs(next.height - tile.height * factor)
+                        );
+                        assert.ok(residual < 0.5, drawerType + ': tile ' + tile.key +
+                            ' residual shift at 2x = ' + residual.toFixed(3) + ' CSS px');
+                    });
+                    assert.ok(shared >= 4, drawerType + ': compared all four central tiles');
+                    done();
+                });
+            });
+
+            viewer.open(dzi);
+        });
+    });
+
 })();
