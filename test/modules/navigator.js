@@ -985,31 +985,28 @@
     });
 
     // Wait for every navigator copy to hold its original TiledImage reference.
-    const withThreeNavigatorItems = function(assert, exercise) {
+    const withNavigatorItems = function(assert, count, exercise) {
         const done = assert.async();
         viewer = OpenSeadragon({
             id: 'example',
             prefixUrl: '/build/openseadragon/images/',
-            tileSources: [
-                '/test/data/testpattern.dzi',
-                '/test/data/testpattern.dzi',
-                '/test/data/testpattern.dzi'
-            ],
+            tileSources: Array(count).fill('/test/data/testpattern.dzi'),
             springStiffness: 100,
             showNavigator: true
         });
 
         const onReady = function() {
             const navigator = viewer.navigator;
-            if (viewer.world.getItemCount() !== 3 || navigator.world.getItemCount() !== 3) {
+            if (viewer.world.getItemCount() !== count || navigator.world.getItemCount() !== count) {
                 return;
             }
             navigator.world.removeHandler('add-item', onReady);
             Promise.resolve().then(function() {
                 try {
-                    const items = [0, 1, 2].map(function(i) {
-                        return viewer.world.getItemAt(i);
-                    });
+                    const items = [];
+                    for (let i = 0; i < count; i++) {
+                        items.push(viewer.world.getItemAt(i));
+                    }
                     items.forEach(function(item, i) {
                         assert.strictEqual(navigator.world.getItemAt(i)._originalForNavigator,
                             item, 'navigator identity at index ' + i);
@@ -1027,6 +1024,10 @@
             viewer.navigator.world.addHandler('add-item', onReady);
             onReady();
         });
+    };
+
+    const withThreeNavigatorItems = function(assert, exercise) {
+        withNavigatorItems(assert, 3, exercise);
     };
 
     const captureReorderCallbacks = function(action) {
@@ -1062,7 +1063,7 @@
                 viewer.world.setItemIndex(items[2], 0);
                 viewer.world.setItemIndex(items[1], 0);
             });
-            assert.strictEqual(callbacks.length, 2, 'both 1ms callbacks captured');
+            assert.strictEqual(callbacks.length, 1, 'queued reorders share one deferred callback');
             assert.strictEqual(viewer.world.getItemAt(0), items[1], 'B is first in viewer');
             assert.strictEqual(viewer.world.getItemAt(1), items[2], 'C is second in viewer');
             assert.strictEqual(viewer.world.getItemAt(2), items[0], 'A is third in viewer');
@@ -1079,7 +1080,7 @@
                 viewer.world.setItemIndex(items[2], 0);
                 viewer.world.setItemIndex(items[1], 0);
             });
-            assert.strictEqual(callbacks.length, 2, 'both 1ms callbacks captured');
+            assert.strictEqual(callbacks.length, 1, 'queued reorders share one deferred callback');
             viewer.world.removeItem(items[0]);
             assert.strictEqual(viewer.world.getItemAt(0), items[1], 'B survives first');
             assert.strictEqual(viewer.world.getItemAt(1), items[2], 'C survives second');
@@ -1087,6 +1088,46 @@
                 callback();
             });
             assertNavigatorMatchesViewer(assert, navigator, 'after queued reorders and removal');
+        });
+    });
+
+    QUnit.test('Navigator preserves loaded subset during a reorder (#2654)', function(assert) {
+        withThreeNavigatorItems(assert, function(items, navigator) {
+            // Model a navigator whose copy of B has not finished loading.
+            const missingCopy = navigator._getMatchingItem(items[1]);
+            assert.ok(missingCopy, 'navigator copy of B exists before removing it');
+            navigator.world.removeItem(missingCopy);
+            assert.strictEqual(navigator.world.getItemCount(), 2, 'navigator has only A and C');
+
+            const callbacks = captureReorderCallbacks(function() {
+                viewer.world.setItemIndex(items[1], 0);
+            });
+            assert.strictEqual(callbacks.length, 1, 'one deferred reconciliation');
+            callbacks[0]();
+
+            assert.strictEqual(viewer.world.getItemAt(0), items[1], 'viewer moved B first');
+            assert.strictEqual(navigator.world.getItemAt(0)._originalForNavigator,
+                items[0], 'A remains first among loaded copies');
+            assert.strictEqual(navigator.world.getItemAt(1)._originalForNavigator,
+                items[2], 'C remains second among loaded copies');
+        });
+    });
+
+    QUnit.test('Navigator coalesces a twelve-item reorder burst (#2654)', function(assert) {
+        withNavigatorItems(assert, 12, function(items, navigator) {
+            const callbacks = captureReorderCallbacks(function() {
+                for (let i = 1; i < items.length; i++) {
+                    viewer.world.setItemIndex(items[i], 0);
+                }
+            });
+            assert.strictEqual(callbacks.length, 1, 'eleven rapid reorders use one callback');
+            callbacks[0]();
+
+            for (let i = 0; i < items.length; i++) {
+                assert.strictEqual(viewer.world.getItemAt(i),
+                    items[items.length - i - 1], 'viewer reversed at index ' + i);
+            }
+            assertNavigatorMatchesViewer(assert, navigator, 'after twelve-item burst');
         });
     });
 

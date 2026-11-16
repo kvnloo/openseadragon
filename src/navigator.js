@@ -270,14 +270,23 @@ $.Navigator = function( options ){
         }
     });
 
+    let reorderScheduled = false;
     viewer.world.addHandler("item-index-change", function() {
+        if (reorderScheduled) {
+            return;
+        }
+        reorderScheduled = true;
         window.setTimeout(function(){
-            // Reconcile the whole surviving order, not indices from queued events.
-            const count = Math.min(viewer.world.getItemCount(), _this.world.getItemCount());
-            for (let i = 0; i < count; i++) {
+            reorderScheduled = false;
+            // Preserve the viewer's relative order even while navigator copies are loading.
+            let nextIndex = 0;
+            for (let i = 0; i < viewer.world.getItemCount(); i++) {
                 const item = _this._getMatchingItem(viewer.world.getItemAt(i));
-                if (item && _this.world.getItemAt(i) !== item) {
-                    _this.world.setItemIndex(item, i);
+                if (item) {
+                    if (_this.world.getItemAt(nextIndex) !== item) {
+                        _this.world.setItemIndex(item, nextIndex);
+                    }
+                    nextIndex++;
                 }
             }
         }, 1);
