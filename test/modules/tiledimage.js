@@ -594,6 +594,87 @@
     });
 
     // ----------
+    QUnit.test('alwaysBlend uncached zoom-out keeps the opaque lower level without loading outgoing tiles', function(assert) {
+        // A selected high-resolution level can be pending its first download when zooming back out.
+        // The outgoing pass must not request or draw nonexistent high-level tiles.
+        const image = Object.create(OpenSeadragon.TiledImage.prototype);
+        image.alwaysBlend = true;
+        image.blendTime = 1;
+        image.minPixelRatio = 0.5;
+        image.savedCutOffLevel = 0;
+        image.immediateRender = false;
+        image.loadDestinationTilesOnAnimation = false;
+        image._alwaysBlendLevel = 2;
+        image._alwaysBlendStart = 1000;
+        image._alwaysBlendOutgoingLevel = null;
+        image._alwaysBlendOutgoingOpacity = 1;
+        image._scaleSpring = { current: { value: 1 } };
+        image.source = {
+            minLevel: 0,
+            maxLevel: 2,
+            getPixelRatio: function(level) {
+                return new OpenSeadragon.Point(Math.pow(2, -level), Math.pow(2, -level));
+            }
+        };
+        image.viewport = {
+            deltaPixelsFromPointsNoRotate: function(point) { return point; }
+        };
+        image.viewer = { world: { ensureTilesUpToDate: function() {} } };
+        image.getDrawArea = function() { return {}; };
+        image._getCachedArray = function() { return []; };
+        image._lastDrawn = [];
+        image._tilesToDraw = [];
+        image.coverage = {};
+        image._setCoverage = function() {};
+        image._providesCoverage = function() { return true; };
+        image.maxTilesPerFrame = 1;
+        image._currentMaxTilesPerFrame = 1;
+
+        const lower = { loaded: true, blendStart: 100, x: 0, y: 0 };
+        const calls = [];
+        image._updateLevel = function(level, opacity, visibility, drawArea, loadArea) {
+            calls.push({ level: level, opacity: opacity, loadArea: loadArea });
+            return {
+                tilesToDraw: level === 1 ? [{ tile: lower, level: 1 }] : [],
+                bestLoadTileCandidates: []
+            };
+        };
+
+        const originalNow = OpenSeadragon.now;
+        let currentTime = 1500;
+        OpenSeadragon.now = function() { return currentTime; };
+        try {
+            image._updateLevelsForViewport();
+            assert.deepEqual(calls.map(function(info) { return info.level; }), [1, 2],
+                'the new lower level is drawn before the uncached outgoing level is considered');
+            assert.strictEqual(calls[0].opacity, 1, 'lower level starts fully opaque');
+            assert.strictEqual(calls[1].opacity, 0.5, 'outgoing level retains its half-faded start');
+            assert.strictEqual(calls[1].loadArea, null, 'no new request area for uncached outgoing tiles');
+            assert.strictEqual(image.getTilesToDraw().length, 1, 'only the cached lower tile draws');
+            assert.strictEqual(lower.opacity, 1, 'lower tile covers the view rather than fading out');
+
+            currentTime = 2000;
+            calls.length = 0;
+            image._updateLevelsForViewport();
+            assert.strictEqual(calls[1].opacity, 0.25, 'outgoing level would be one-quarter opaque halfway through');
+            assert.strictEqual(calls[1].loadArea, null, 'outgoing level remains download-free');
+            assert.strictEqual(image.getTilesToDraw().length, 1, 'no uncached upper tile enters the drawn set');
+
+            currentTime = 2500;
+            calls.length = 0;
+            image._updateLevelsForViewport();
+            const remaining = image.getTilesToDraw();
+            assert.deepEqual(calls.map(function(info) { return info.level; }), [1],
+                'outgoing level is no longer selected at the one-second endpoint');
+            assert.strictEqual(image._alwaysBlendOutgoingLevel, null, 'outgoing state clears');
+            assert.strictEqual(remaining.length, 1, 'lower tile remains visible');
+            assert.strictEqual(remaining[0].tile, lower, 'the loaded lower tile is retained');
+        } finally {
+            OpenSeadragon.now = originalNow;
+        }
+    });
+
+    // ----------
     QUnit.test('rotation', function(assert) {
         const done = assert.async();
         function testDefaultRotation() {
