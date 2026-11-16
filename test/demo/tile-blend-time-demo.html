@@ -400,7 +400,8 @@
 
 <script>
     (function () {
-        const delayInMs = 160;
+        const evidenceMode = new URL(window.location.href).searchParams.has('reverseZoomEvidence');
+        const delayInMs = evidenceMode ? 20 : 160;
         const MAX_LAYERS = 5;
         const BASE_ROWS = Array.from({ length: 14 }, function (_, i) {
             return { w: Math.pow(2, i), h: Math.pow(2, i), tw: 256 };
@@ -456,8 +457,16 @@
             }
 
             async downloadTileStart(context) {
-                if (delayInMs) {
-                    await delay(delayInMs);
+                let tileDelay = delayInMs;
+                if (evidenceMode && window.__blendEvidence) {
+                    const evidence = window.__blendEvidence;
+                    evidence.downloads.push({ level: context.tile.level, x: context.tile.x, y: context.tile.y });
+                    if (evidence.delayHighTiles && context.tile.level > evidence.startLevel) {
+                        tileDelay = 3000;
+                    }
+                }
+                if (tileDelay) {
+                    await delay(tileDelay);
                 }
 
                 const tile = context.tile;
@@ -764,7 +773,7 @@
                     y: 0,
                     width: 1,
                     opacity: opacity,
-                    preload: true
+                    preload: !evidenceMode
                 });
             }
             return list;
@@ -1092,7 +1101,9 @@
             createLegend();
             applyQueryParams();
 
-            presetConfigs.forEach(function (config) {
+            (evidenceMode ? presetConfigs.filter(function (config) {
+                return config.sandbox;
+            }) : presetConfigs).forEach(function (config) {
                 createViewerCard(config);
                 const entry = {
                     config: config,
@@ -1107,6 +1118,15 @@
                 viewerEntries.push(entry);
             });
 
+            if (evidenceMode) {
+                // Expose the live sandbox only for the opt-in Puppeteer evidence runner.
+                window.__blendEvidence = {
+                    getViewer: function () { return viewerEntries[0].viewer; },
+                    startLevel: null,
+                    delayHighTiles: false,
+                    downloads: []
+                };
+            }
             connectControls();
             rebuildAll();
         }

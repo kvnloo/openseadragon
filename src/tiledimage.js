@@ -238,6 +238,10 @@ $.TiledImage = function( options ) {
     delete this.preload;
 
     this._fullyLoaded = false;
+    this._alwaysBlendLevel = null;
+    this._alwaysBlendStart = 0;
+    this._alwaysBlendOutgoingLevel = null;
+    this._alwaysBlendOutgoingOpacity = 1;
 
     this._xSpring = new $.Spring({
         initial: x,
@@ -1561,6 +1565,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
         const maxLevel = this.source.maxLevel || 0;
 
         let coverageSucceeded = false;
+        let topLevel = null;
 
         const targetZeroRatio = this.viewport.deltaPixelsFromPointsNoRotate(
             this.source.getPixelRatio(Math.max(this.savedCutOffLevel, 0)), false
@@ -1588,12 +1593,30 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                 continue;
             }
 
+            // A level transition starts when the preferred resolution changes,
+            // not every frame of zoom animation or on every cached tile draw.
+            if (topLevel === null) {
+                topLevel = level;
+                if (this.alwaysBlend && this._alwaysBlendLevel !== level) {
+                    const previousLevel = this._alwaysBlendLevel;
+                    const previousOpacity = this._getLevelOpacity(previousLevel, currentTime);
+                    // On zoom-out the outgoing, higher-resolution cached level fades
+                    // away over the new, already-opaque lower-resolution level.
+                    this._alwaysBlendOutgoingLevel = Number.isInteger(previousLevel) && previousLevel > level &&
+                        this.blendTime > 0 ? previousLevel : null;
+                    this._alwaysBlendOutgoingOpacity = previousOpacity;
+                    this._alwaysBlendLevel = level;
+                    this._alwaysBlendStart = currentTime;
+                    this._needsDraw = true;
+                }
+            }
+
             const targetRenderPixelRatio = this.viewport.deltaPixelsFromPointsNoRotate(
                 this.source.getPixelRatio(level),
                 false
             ).x * this._scaleSpring.current.value;
 
-            const levelOpacity = this._getLevelOpacity(currentRenderPixelRatio);
+            const levelOpacity = this._getLevelOpacity(level, currentTime);
             const levelVisibility = optimalRatio / Math.abs(
                 optimalRatio - targetRenderPixelRatio
             );
@@ -1616,7 +1639,8 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
 
             // Stop the loop if lower-res tiles would all be covered by
             // already drawn tiles
-            if (this._providesCoverage(this.coverage, level)) {
+            if (this._providesCoverage(this.coverage, level) &&
+                !(this.alwaysBlend && level === topLevel && levelOpacity < 1)) {
                 coverageSucceeded = true;
                 break;
             }
@@ -1641,14 +1665,8 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                 this.source.getPixelRatio(Math.max(this.savedCutOffLevel, 0)), false
             ).x * this._scaleSpring.current.value;
 
-            const currentRenderPixelRatio =
-                this.viewport.deltaPixelsFromPointsNoRotate(
-                    this.source.getPixelRatio(level),
-                    true
-                ).x * this._scaleSpring.current.value;
-
             const optimalRatio = this.immediateRender ? 1 : targetZeroRatio;
-            const levelOpacity = this._getLevelOpacity(currentRenderPixelRatio);
+            const levelOpacity = this._getLevelOpacity(level, currentTime);
             const levelVisibility = optimalRatio / Math.abs(
                 optimalRatio - targetRenderPixelRatio
             );
@@ -1670,6 +1688,23 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
             this._tilesToDraw[level] = result.tilesToDraw;
         }
 
+
+        // Retain cached tiles from the outgoing higher level during zoom-out.
+        // Passing no load area prevents this visual transition from fetching tiles.
+        if (this.alwaysBlend && Number.isInteger(this._alwaysBlendOutgoingLevel) &&
+            currentTime - this._alwaysBlendStart < this.blendTime * 1000) {
+            const outgoingLevel = this._alwaysBlendOutgoingLevel;
+            const targetRatio = this.viewport.deltaPixelsFromPointsNoRotate(
+                this.source.getPixelRatio(outgoingLevel), false
+            ).x * this._scaleSpring.current.value;
+            const visibility = optimalRatio / Math.abs(optimalRatio - targetRatio);
+            const outgoing = this._updateLevel(
+                outgoingLevel, this._getLevelOpacity(outgoingLevel, currentTime),
+                visibility, drawArea, null, currentTime, bestLoadTileCandidates
+            );
+            this.viewer.world.ensureTilesUpToDate(outgoing.tilesToDraw);
+            this._tilesToDraw[outgoingLevel] = outgoing.tilesToDraw;
+        }
 
         // _currentMaxTilesPerFrame is temporarily boosted whenever new tiles become needed; bring it down once
         // per frame if necessary. This must not live in _updateLevel(), which runs once per pyramid level and
@@ -1725,7 +1760,6 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                     tile.x,
                     tile.y,
                     info.level,
-                    info.levelOpacity,
                     currentTime,
                     lowestLevel
                 );
@@ -1736,7 +1770,8 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
             // Tiles arrive grouped by level, and a level's coverage is only written by its own
             // tiles, so checking once at the end of each group matches checking after every tile.
             const next = tiles[i + 1];
-            if ((!next || next.level !== info.level) && this._providesCoverage(this.coverage, info.level)) {
+            if ((!next || next.level !== info.level) && info.level !== this._alwaysBlendOutgoingLevel &&
+                this._providesCoverage(this.coverage, info.level)) {
                 level = Math.max(level, info.level);
             }
         }
@@ -1747,23 +1782,36 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                 }
             }
         }
+        if (Number.isInteger(this._alwaysBlendOutgoingLevel) &&
+            currentTime - this._alwaysBlendStart >= this.blendTime * 1000) {
+            this._tilesToDraw[this._alwaysBlendOutgoingLevel] = undefined;
+            this._alwaysBlendOutgoingLevel = null;
+        }
     },
 
     /**
-     * Opacity ramp applied to a level when alwaysBlend is set: a level fades in across the scale range it
-     * is actually drawn at. Level selection keeps that range at [minPixelRatio, 2 * minPixelRatio), so the
-     * ramp is derived from minPixelRatio rather than assuming its default value. Levels drawn outside that
-     * range - the minimum level and the cut-off level, which bypass the selection gate - are clamped.
-     * @param {Number} currentRenderPixelRatio device pixels per source pixel at the level being drawn
+     * Time-based opacity of the preferred resolution level when alwaysBlend is
+     * enabled. On zoom-in the incoming level fades in over lower levels; on
+     * zoom-out the outgoing higher level fades out over the fully opaque lower
+     * level. Sampled each draw so blending finishes even after zooming stops.
+     * @param {Number} level The resolution level being drawn
+     * @param {Number} currentTime Time in milliseconds
      * @returns {Number} opacity in [0, 1]
      * @private
      */
-    _getLevelOpacity: function( currentRenderPixelRatio ) {
-        const minRatio = this.minPixelRatio;
-        if ( minRatio <= 0 ) {
+    _getLevelOpacity: function(level, currentTime) {
+        if (!this.alwaysBlend || this.blendTime <= 0) {
             return 1;
         }
-        return Math.max( 0, Math.min( 1, ( currentRenderPixelRatio - minRatio ) / minRatio ) );
+        const progress = Math.max(0, Math.min(1,
+            (currentTime - this._alwaysBlendStart) / (1000 * this.blendTime)));
+        if (Number.isInteger(this._alwaysBlendOutgoingLevel) && level === this._alwaysBlendOutgoingLevel) {
+            return this._alwaysBlendOutgoingOpacity * (1 - progress);
+        }
+        if (level === this._alwaysBlendLevel) {
+            return Number.isInteger(this._alwaysBlendOutgoingLevel) ? 1 : progress;
+        }
+        return 1;
     },
 
     /**
@@ -1777,12 +1825,11 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
      * @param {Number} x
      * @param {Number} y
      * @param {Number} level
-     * @param {Number} levelOpacity
      * @param {Number} currentTime
-     * @param {Boolean} lowestLevel
+     * @param {Number} lowestLevel
      * @returns {Boolean} true if blending did not yet finish
      */
-    _blendTile: function(tile, x, y, level, levelOpacity, currentTime, lowestLevel ){
+    _blendTile: function(tile, x, y, level, currentTime, lowestLevel) {
         let blendTimeMillis = 1000 * this.blendTime,
             deltaTime,
             opacity;
@@ -1800,9 +1847,11 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
             deltaTime = blendTimeMillis;
         }
 
-        if ( this.alwaysBlend ) {
-            opacity *= levelOpacity;
-        }
+        // Cached tiles may have finished their original fade. Fade a newly
+        // preferred level on its own timer without double-fading new tiles.
+        const levelOpacity = this.alwaysBlend && level !== lowestLevel ?
+            this._getLevelOpacity(level, currentTime) : 1;
+        opacity = Math.min(opacity, levelOpacity);
         tile.opacity = opacity;
 
         if ( opacity === 1 ) {
@@ -1810,7 +1859,11 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
             this._hasOpaqueTile = true;
         }
         // return true if the tile is still blending
-        return deltaTime < blendTimeMillis;
+        // At the very start of a zoom-out the outgoing level may still be fully
+        // opaque, but its fade-out must keep the viewer drawing.
+        return deltaTime < blendTimeMillis || levelOpacity < 1 ||
+            (level === this._alwaysBlendOutgoingLevel &&
+                currentTime - this._alwaysBlendStart < blendTimeMillis);
     },
 
     /**

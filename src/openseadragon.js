@@ -177,9 +177,11 @@
   *     replacing the existing tile.
   *
   * @property {Boolean} [alwaysBlend=false]
-  *     Forces the tile to always blend.  By default the tiles skip blending
-  *     when the blendTime is surpassed and the current animation frame would
-  *     not complete the blend.
+  *     Starts a time-based blend when the preferred resolution level changes,
+  *     even for cached tiles. When zooming in, the new higher level fades in;
+  *     when zooming out, the previously drawn cached higher level fades out
+  *     over the opaque lower level. Both settle after blendTime seconds.
+  *     By default, only newly loaded tiles blend.
   *
   * @property {Boolean} [autoHideControls=true]
   *     If the user stops interacting with the viewport, fade the navigation
