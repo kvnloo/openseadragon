@@ -51,6 +51,153 @@
             done();
         });
 
+        // The same physical pointer position must address the same image point
+        // regardless of whether the image is drawn by Canvas or WebGL.
+        if (drawerType === 'canvas' || drawerType === 'webgl') {
+            QUnit.test('flipped click, wheel, and navigator preserve pointer coordinates', function(assert) {
+                const done = assert.async();
+                createViewer({
+                    tileSources: '/test/data/testpattern.dzi',
+                    showNavigator: true,
+                    navigatorDrawer: drawerType,
+                    minScrollDeltaTime: 0
+                });
+
+                viewer.addOnceHandler('open', function() {
+                    const Point = OpenSeadragon.Point;
+                    const viewport = viewer.viewport;
+                    const center = new Point(0.5, 0.5);
+                    viewport.zoomTo(2, null, true);
+                    viewport.panTo(center, true);
+                    viewport.setFlip(true);
+
+                    const size = viewport.getContainerSize();
+                    const pixel = new Point(size.x / 4, size.y / 2);
+                    // At zoom 2, a quarter-width mirrored pixel is 1/8 world unit
+                    // to the right of center. Allow at most one CSS pixel of event offset.
+                    const tolerance = 1 / (2 * size.x);
+                    const expectedX = center.x + 1 / 8;
+                    assert.strictEqual(viewer.drawer.getType(), drawerType, 'requested drawer is active');
+                    assert.ok(viewer.navigator.viewport.getFlip(), 'navigator shares the flip state');
+                    const mapped = viewport.pointFromPixel(pixel, true);
+                    assert.ok(Math.abs(mapped.x - expectedX) < 1e-10, 'flipped left pixel maps right');
+                    assert.ok(Math.abs(mapped.y - center.y) < 1e-10, 'horizontal flip preserves y');
+
+                    const originalZoomBy = viewport.zoomBy;
+                    const zoomReferences = [];
+                    viewport.zoomBy = function(factor, reference) {
+                        zoomReferences.push(reference ? reference.clone() : null);
+                        return originalZoomBy.apply(this, arguments);
+                    };
+
+                    const canvas = $(viewer.canvas);
+                    const canvasOffset = canvas.offset();
+                    const mouse = {
+                        button: 0,
+                        clientX: canvasOffset.left + pixel.x,
+                        clientY: canvasOffset.top + pixel.y
+                    };
+                    let clickPosition;
+                    viewer.addOnceHandler('canvas-click', function(event) {
+                        clickPosition = event.position;
+                    });
+                    canvas.simulate('mouseenter', mouse)
+                        .simulate('mousedown', mouse)
+                        .simulate('mouseup', mouse);
+
+                    assert.ok(clickPosition, 'DOM mouse click reaches the viewer');
+                    if (clickPosition) {
+                        assert.ok(Math.abs(clickPosition.x - pixel.x) < 1,
+                            'click event retains physical left-quarter x after default action');
+                    }
+                    assert.strictEqual(zoomReferences.length, 1, 'click zooms exactly once');
+                    if (zoomReferences[0]) {
+                        assert.ok(Math.abs(zoomReferences[0].x - expectedX) < tolerance,
+                            'click zoom anchors on the mirrored image point');
+                    }
+
+                    viewport.zoomTo(2, null, true);
+                    viewport.panTo(center, true);
+                    viewer._lastScrollTime = 0;
+                    let wheelPosition;
+                    viewer.addOnceHandler('canvas-scroll', function(event) {
+                        wheelPosition = event.position;
+                    });
+                    viewer.canvas.dispatchEvent(new WheelEvent('wheel', {
+                        bubbles: true,
+                        cancelable: true,
+                        clientX: mouse.clientX,
+                        clientY: mouse.clientY,
+                        deltaY: -120
+                    }));
+                    viewport.zoomBy = originalZoomBy;
+
+                    assert.ok(wheelPosition, 'DOM wheel reaches the viewer');
+                    if (wheelPosition) {
+                        assert.ok(Math.abs(wheelPosition.x - pixel.x) < 1,
+                            'wheel event retains physical left-quarter x');
+                    }
+                    assert.strictEqual(zoomReferences.length, 2, 'wheel zooms exactly once');
+                    if (zoomReferences[1]) {
+                        assert.ok(Math.abs(zoomReferences[1].x - expectedX) < tolerance,
+                            'wheel zoom anchors on the same mirrored image point');
+                    }
+
+                    viewport.zoomTo(2, null, true);
+                    viewport.panTo(center, true);
+                    const navigator = viewer.navigator;
+                    const navCanvas = $(navigator.element).find('.openseadragon-canvas').first();
+                    assert.strictEqual(navCanvas.length, 1, 'navigator has a tracked canvas');
+                    if (!navCanvas.length) {
+                        done();
+                        return;
+                    }
+
+                    const navSize = navigator.viewport.getContainerSize();
+                    const navPixel = new Point(navSize.x / 4, navSize.y / 2);
+                    const navOffset = navCanvas.offset();
+                    const navMouse = {
+                        button: 0,
+                        clientX: navOffset.left + navPixel.x,
+                        clientY: navOffset.top + navPixel.y
+                    };
+                    let navigatorClickPosition;
+                    let navigatorTarget;
+                    const originalPanTo = viewport.panTo;
+                    viewport.panTo = function(point) {
+                        if (!navigatorTarget) {
+                            navigatorTarget = point.clone();
+                        }
+                        return originalPanTo.apply(this, arguments);
+                    };
+                    viewer.addOnceHandler('navigator-click', function(event) {
+                        navigatorClickPosition = event.position;
+                    });
+                    navCanvas.simulate('mouseenter', navMouse)
+                        .simulate('mousedown', navMouse)
+                        .simulate('mouseup', navMouse);
+                    viewport.panTo = originalPanTo;
+
+                    assert.ok(navigatorClickPosition, 'DOM navigator click reaches the viewer');
+                    if (navigatorClickPosition) {
+                        assert.ok(navigatorClickPosition.x < navSize.x / 2,
+                            'navigator click retains its physical left-half position');
+                    }
+                    assert.ok(navigatorTarget, 'navigator click pans the main viewport');
+                    if (navigatorTarget && navigatorClickPosition) {
+                        const expectedTarget = navigator.viewport.pointFromPixel(navigatorClickPosition);
+                        const navTolerance = 1 / navSize.x;
+                        assert.ok(Math.abs(navigatorTarget.x - expectedTarget.x) < navTolerance,
+                            'navigator pans to its mapped x coordinate');
+                        assert.ok(navigatorTarget.x > navigator.viewport.getCenter().x,
+                            'physical left navigator click targets the right side of the flipped image');
+                    }
+                    done();
+                });
+            });
+        }
+
+        // ----------
         // ----------
         QUnit.test('isWebGL2', function(assert) {
             const done = assert.async();
