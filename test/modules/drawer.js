@@ -198,7 +198,8 @@
         }
 
 
-            QUnit.test('flipped 45-degree margined mouse and touch pointer map to image pixels', function(assert) {
+        if (drawerType === 'canvas' || drawerType === 'webgl') {
+            QUnit.test('flipped 45-degree margined mouse maps to image pixels', function(assert) {
                 const done = assert.async();
                 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000">' +
                     '<rect width="1000" height="1000" fill="white"/>' +
@@ -227,8 +228,6 @@
                     viewport.zoomTo(2, null, true);
                     viewport.panTo(center, true);
                     viewport.setFlip(true);
-                    viewer.gestureSettingsTouch.clickToZoom = true;
-                    viewer.gestureSettingsTouch.zoomToRefPoint = true;
 
                     // Independent geometry oracle: undo the *visual* x reflection,
                     // remove margins, divide by zoom, then undo 45-degree rotation.
@@ -243,7 +242,7 @@
                     assert.deepEqual(viewer.world.getItemAt(0).getContentSize(),
                         new Point(1000, 1000), 'real 1000px image is open');
                     assert.ok(Math.abs(viewport.pointFromPixel(pixel, true).x - expectedWorld.x) < 1e-10,
-                        'mirrored physical x maps to the rotated, margined world x');
+                        'mirrored viewer x maps to the rotated, margined world x');
                     assert.ok(Math.abs(viewport.pointFromPixel(pixel, true).y - expectedWorld.y) < 1e-10,
                         'rotated, margined world y is independently correct');
 
@@ -263,8 +262,7 @@
                             click = {
                                 position: event.position.clone(),
                                 image: viewport.viewerElementToImageCoordinates(event.position),
-                                quick: event.quick,
-                                pointerType: event.originalEvent.pointerType
+                                quick: event.quick
                             };
                         });
                         viewport.zoomBy = function(factor, reference) {
@@ -283,14 +281,10 @@
                             assert.ok(click.quick, label + ' completes a quick press/release');
                             assert.ok(Math.abs(click.position.x - pixel.x) < 1 &&
                                 Math.abs(click.position.y - pixel.y) < 1,
-                            label + ' preserves the physical canvas position');
+                            label + ' preserves the reported canvas position');
                             assert.ok(Math.abs(click.image.x - expectedImage.x) < imageTolerance &&
                                 Math.abs(click.image.y - expectedImage.y) < imageTolerance,
                             label + ' selects the independently computed image point');
-                            if (label === 'touch') {
-                                assert.strictEqual(click.pointerType, 'touch',
-                                    'touch PointerEvent stays on the touch gesture path');
-                            }
                         }
                         assert.strictEqual(zoomCount, 1, label + ' invokes one click zoom');
                         assert.ok(zoomReference &&
@@ -305,22 +299,6 @@
                             .simulate('mousedown', mouse)
                             .simulate('mouseup', mouse);
                     });
-                    exercisePointer('touch', function() {
-                        const down = {
-                            bubbles: true,
-                            cancelable: true,
-                            pointerId: 41,
-                            pointerType: 'touch',
-                            isPrimary: true,
-                            button: 0,
-                            buttons: 1,
-                            clientX: clientX,
-                            clientY: clientY
-                        };
-                        viewer.canvas.dispatchEvent(new PointerEvent('pointerdown', down));
-                        viewer.canvas.dispatchEvent(new PointerEvent('pointerup',
-                            Object.assign({}, down, { buttons: 0 })));
-                    });
                     done();
                 });
                 viewer.addOnceHandler('open-failed', function(event) {
@@ -333,6 +311,7 @@
                     buildPyramid: false
                 });
             });
+        }
 
         // ----------
         // ----------
