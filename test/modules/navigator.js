@@ -1105,6 +1105,52 @@
         });
     });
 
+    QUnit.test('Display region recovers after the viewer container is hidden', function(assert) {
+        const done = assert.async();
+        const $viewerElement = $('#example');
+
+        viewer = OpenSeadragon({
+            id: 'example',
+            prefixUrl: '/build/openseadragon/images/',
+            tileSources: '/test/data/testpattern.dzi',
+            springStiffness: 100,
+            showNavigator: true
+        });
+
+        viewer.addOnceHandler('open', function() {
+            waitForViewer(assert, function() {
+                assessDisplayRegion(assert, 'Before hiding the viewer');
+                assert.ok(viewer.navigator.oldContainerSize.x > 1 &&
+                    viewer.navigator.oldContainerSize.y > 1, 'Navigator starts at a visible size');
+
+                $viewerElement.hide();
+                assert.strictEqual(viewer.navigator.container.clientWidth, 0, 'Hidden navigator has no layout width');
+                assert.strictEqual(viewer.navigator.container.clientHeight, 0, 'Hidden navigator has no layout height');
+
+                // A size notification while the enclosing tab is hidden must not
+                // replace the last valid navigator viewport with a 1x1 viewport.
+                viewer.navigator.updateSize();
+                viewer.viewport.zoomTo(viewer.viewport.getZoom() * 1.5, null, true);
+                viewer.viewport.panTo(new OpenSeadragon.Point(0.4, 0.3), true);
+
+                $viewerElement.show();
+                viewer.forceResize();
+                viewer.forceRedraw();
+
+                waitForViewer(assert, function() {
+                    assert.strictEqual(viewer.navigator.oldContainerSize.x,
+                        viewer.navigator.container.clientWidth, 'Navigator layout width is restored');
+                    assert.strictEqual(viewer.navigator.oldContainerSize.y,
+                        viewer.navigator.container.clientHeight, 'Navigator layout height is restored');
+                    assert.ok(displayRegion.width() > 10, 'Display region is not a collapsed dot');
+                    assert.ok(displayRegion.height() > 10, 'Display region has a visible height');
+                    assessDisplayRegion(assert, 'After restoring the viewer');
+                    done();
+                });
+            });
+        });
+    });
+
     QUnit.test('Explicit height/width', function(assert) {
         const done = assert.async();
         viewer = OpenSeadragon({
