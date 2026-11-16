@@ -270,12 +270,15 @@ $.Navigator = function( options ){
         }
     });
 
-    viewer.world.addHandler("item-index-change", function(event) {
+    viewer.world.addHandler("item-index-change", function() {
         window.setTimeout(function(){
-            const item = _this._getMatchingItem(event.item);
-            const index = viewer.world.getIndexOfItem(event.item);
-            if (item && index !== -1 && index < _this.world.getItemCount()) {
-                _this.world.setItemIndex(item, index);
+            // Reconcile the whole surviving order, not indices from queued events.
+            const count = Math.min(viewer.world.getItemCount(), _this.world.getItemCount());
+            for (let i = 0; i < count; i++) {
+                const item = _this._getMatchingItem(viewer.world.getItemAt(i));
+                if (item && _this.world.getItemAt(i) !== item) {
+                    _this.world.setItemIndex(item, i);
+                }
             }
         }, 1);
     });
