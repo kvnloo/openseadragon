@@ -1241,6 +1241,74 @@
         viewer.open(DZI_PATH);
     });
 
+
+    QUnit.test('flipped single-image 1000px oracle covers Viewport and TiledImage', function(assert) {
+        const done = assert.async();
+        const Point = OpenSeadragon.Point;
+        // An inline 1000x1000 SVG is a real image, without external test assets or requests.
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000">' +
+            '<rect width="1000" height="1000" fill="white"/>' +
+            '<path d="M375 0V1000" stroke="blue"/>' +
+            '<path d="M625 0V1000" stroke="red"/>' +
+            '</svg>';
+        const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+
+        viewer.addOnceHandler('open', function() {
+            assert.strictEqual(viewer.world.getItemCount(), 1, 'Exactly one image is open');
+            const image = viewer.world.getItemAt(0);
+            assertPointsEquals(assert, image.getContentSize(), new Point(1000, 1000),
+                EPSILON, 'The inline image has the required 1000x1000 dimensions');
+
+            const viewport = viewer.viewport;
+            viewport.setRotation(0, true);
+            viewport.zoomTo(2, null, true);
+            viewport.panTo(new Point(0.5, 0.5), true);
+            const size = viewport.getContainerSize();
+            const cursor = new Point(size.x / 4, size.y / 2);
+
+            function checkConversion(expectedWorld, expectedImage, label) {
+                const worldPoint = viewport.pointFromPixel(cursor, true);
+                const imageWorldPoint = image.imageToViewportCoordinates(expectedImage, true);
+
+                assertPointsEquals(assert, worldPoint, expectedWorld, EPSILON,
+                    label + ': viewer pixel -> Viewport point');
+                assertPointsEquals(assert, viewport.pixelFromPoint(expectedWorld, true),
+                    cursor, EPSILON, label + ': Viewport point -> viewer pixel');
+                assertPointsEquals(assert, viewport.viewportToImageCoordinates(worldPoint),
+                    expectedImage, EPSILON, label + ': Viewport point -> image pixel');
+                assertPointsEquals(assert, viewport.imageToViewportCoordinates(expectedImage),
+                    expectedWorld, EPSILON, label + ': image pixel -> Viewport point');
+                assertPointsEquals(assert, viewport.viewerElementToImageCoordinates(cursor),
+                    expectedImage, EPSILON, label + ': viewer pixel -> image pixel');
+                assertPointsEquals(assert, viewport.imageToViewerElementCoordinates(expectedImage),
+                    cursor, EPSILON, label + ': image pixel -> viewer pixel');
+                assertPointsEquals(assert, image.viewportToImageCoordinates(worldPoint, true),
+                    expectedImage, EPSILON, label + ': TiledImage viewport -> image');
+                assertPointsEquals(assert, imageWorldPoint,
+                    expectedWorld, EPSILON, label + ': TiledImage image -> viewport');
+                assertPointsEquals(assert, image.viewportToImageCoordinates(imageWorldPoint, true),
+                    expectedImage, EPSILON, label + ': TiledImage forward/inverse round trip');
+                assertPointsEquals(assert, viewport.pixelFromPoint(imageWorldPoint, true),
+                    cursor, EPSILON, label + ': TiledImage -> Viewport -> viewer pixel');
+            }
+
+            viewport.setFlip(false);
+            checkConversion(new Point(0.375, 0.5), new Point(375, 500), 'Unflipped');
+            viewport.setFlip(true);
+            checkConversion(new Point(0.625, 0.5), new Point(625, 500), 'Flipped');
+            done();
+        });
+        viewer.addOnceHandler('open-failed', function(event) {
+            assert.ok(false, 'Inline image failed to open: ' + event.message);
+            done();
+        });
+        viewer.open({
+            type: 'image',
+            url: url,
+            buildPyramid: false
+        });
+    });
+
     QUnit.test('flipped logical rectangles and 45-degree constraints preserve margins', function(assert) {
         const done = assert.async();
         viewer.addOnceHandler('open', function() {
