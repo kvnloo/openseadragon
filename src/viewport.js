@@ -1207,7 +1207,7 @@ $.Viewport.prototype = {
     _adjustCenterSpringsForZoomPoint: function(zoomSpringHandler) {
         if (this.zoomPoint) {
             // Zoom anchoring uses logical pixels; the presentation flip is not part of spring geometry.
-        const oldZoomPixel = this._pixelFromPoint(this.zoomPoint, this.getBoundsNoRotate(true));
+            const oldZoomPixel = this._pixelFromPoint(this.zoomPoint, this.getBoundsNoRotate(true));
             zoomSpringHandler();
             const newZoomPixel = this._pixelFromPoint(this.zoomPoint, this.getBoundsNoRotate(true));
 
