@@ -179,6 +179,66 @@
         });
 
         // ----------
+        if (drawerType === 'canvas') {
+            QUnit.test('debug text remains unmirrored when the viewport flips', function(assert) {
+                const done = assert.async();
+                createViewer({
+                    tileSources: '/test/data/testpattern.dzi',
+                    debugMode: true
+                });
+
+                const context = viewer.drawer.context;
+                const originalFillText = context.fillText;
+                const textScales = [];
+                let recording = false;
+
+                context.fillText = function() {
+                    if (recording) {
+                        textScales.push(this.getTransform().a);
+                    }
+                    return originalFillText.apply(this, arguments);
+                };
+
+                function verifyFrame(flipped, next) {
+                    textScales.length = 0;
+                    recording = true;
+
+                    // This event fires after CanvasDrawer draws the per-tile debug labels.
+                    viewer.addOnceHandler('tiled-image-drawn', function() {
+                        recording = false;
+                        assert.strictEqual(viewer.viewport.getFlip(), flipped,
+                            'the requested viewport flip state was rendered');
+                        assert.ok(textScales.length > 0,
+                            'the tile debug labels were drawn');
+                        assert.ok(textScales.every(scale => scale > 0),
+                            'every debug label has positive horizontal scale');
+                        assert.strictEqual(context.getTransform().a, flipped ? -1 : 1,
+                            'the canvas keeps its viewport transform after drawing debug labels');
+                        next();
+                    });
+
+                    viewer.viewport.setFlip(flipped);
+                    viewer.forceRedraw();
+                }
+
+                viewer.addOnceHandler('open', function() {
+                    viewer.world.getItemAt(0).whenFullyLoaded(function() {
+                        // Start after the current draw so each observation belongs to
+                        // the forceRedraw requested by this test.
+                        setTimeout(function() {
+                            verifyFrame(false, function() {
+                                verifyFrame(true, function() {
+                                    context.fillText = originalFillText;
+                                    done();
+                                });
+                            });
+                        }, 0);
+                    });
+                });
+            });
+        }
+
+        // ----------
         QUnit.test('sketchCanvas', function(assert) {
             const done = assert.async();
 
