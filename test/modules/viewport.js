@@ -1241,6 +1241,102 @@
         viewer.open(DZI_PATH);
     });
 
+    QUnit.test('flipped logical rectangles and 45-degree constraints preserve margins', function(assert) {
+        const done = assert.async();
+        viewer.addOnceHandler('open', function() {
+            const viewport = viewer.viewport;
+            const Point = OpenSeadragon.Point;
+            const Rect = OpenSeadragon.Rect;
+            const size = viewport.getContainerSize();
+            // Deliberately asymmetric: logical geometry must not mirror the margins.
+            const margins = {
+                left: size.x / 10,
+                top: size.y / 8,
+                right: size.x / 5,
+                bottom: size.y / 6
+            };
+            const innerWidth = size.x - margins.left - margins.right;
+            const innerHeight = size.y - margins.top - margins.bottom;
+            viewport.setMargins(margins);
+            viewport.zoomTo(2, null, true);
+            viewport.panTo(new Point(0.5, 0.5), true);
+
+            // At zoom 2, the logical top-left (0.4, 0.4) is 0.3 inner
+            // widths from the left and 0.2 inner widths above the center.
+            const logicalRect = new Rect(0.4, 0.4, 0.2, 0.1, 45);
+            const pixelRect = new Rect(
+                margins.left + innerWidth * 0.3,
+                margins.top + innerHeight / 2 - innerWidth * 0.2,
+                innerWidth * 0.4,
+                innerWidth * 0.2,
+                45
+            );
+            Util.assertRectangleEquals(assert, viewport.viewportToViewerElementRectangle(logicalRect),
+                pixelRect, EPSILON, '45-degree logical rectangle includes asymmetric margins');
+            Util.assertRectangleEquals(assert, viewport.viewerElementToViewportRectangle(pixelRect),
+                logicalRect, EPSILON, 'Logical rectangle round-trips through viewer pixels');
+            assertPointsEquals(assert, viewport.pixelFromPoint(logicalRect.getTopLeft(), true),
+                pixelRect.getTopLeft(), EPSILON, 'Unflipped point uses the same margin offset');
+
+            viewport.setFlip(true);
+            Util.assertRectangleEquals(assert, viewport.viewportToViewerElementRectangle(logicalRect),
+                pixelRect, EPSILON, 'Flipping does not mirror logical rectangle geometry');
+            Util.assertRectangleEquals(assert, viewport.viewerElementToViewportRectangle(pixelRect),
+                logicalRect, EPSILON, 'Flipped logical rectangle still round-trips');
+            assertPointsEquals(assert, viewport.pixelFromPoint(logicalRect.getTopLeft(), true),
+                new Point(size.x - pixelRect.x, pixelRect.y), EPSILON,
+                'Public point conversion mirrors across the full viewer, not the inner margin');
+
+            viewport.setRotation(45, true);
+            const axisRect = new Rect(0.4, 0.4, 0.2, 0.1);
+            const rotatedPixels = new Rect(
+                margins.left + innerWidth / 2,
+                margins.top + innerHeight / 2 - Math.SQRT2 * innerWidth / 5,
+                innerWidth * 0.4,
+                innerWidth * 0.2,
+                45
+            );
+            viewport.setFlip(false);
+            Util.assertRectangleEquals(assert, viewport.viewportToViewerElementRectangle(axisRect),
+                rotatedPixels, EPSILON, 'Rotated rectangle honors both margins and 45-degree rotation');
+            Util.assertRectangleEquals(assert, viewport.viewerElementToViewportRectangle(rotatedPixels),
+                axisRect, EPSILON, 'Rotated rectangle round-trips without a flip');
+            viewport.setFlip(true);
+            Util.assertRectangleEquals(assert, viewport.viewportToViewerElementRectangle(axisRect),
+                rotatedPixels, EPSILON, 'Flipped 45-degree viewport retains the same logical rectangle');
+            Util.assertRectangleEquals(assert, viewport.viewerElementToViewportRectangle(rotatedPixels),
+                axisRect, EPSILON, 'Flipped rotated rectangle round-trips');
+            assertPointsEquals(assert, viewport.pixelFromPoint(axisRect.getTopLeft(), true),
+                new Point(size.x - rotatedPixels.x, rotatedPixels.y), EPSILON,
+                'Flipped 45-degree point still reflects in viewer space');
+
+            viewport.visibilityRatio = 0.3;
+            const outsideCenter = new Point(1.3, 1.25);
+            viewport.setFlip(false);
+            viewport.panTo(outsideCenter, true);
+            const logicalConstraints = viewport.getConstrainedBounds(true);
+            assert.ok(logicalConstraints.constraintApplied,
+                'Out-of-bounds 45-degree viewport actually exercises constraints');
+            viewport.applyConstraints(true);
+            const expectedBounds = viewport.getBounds(true);
+
+            viewport.panTo(outsideCenter, true);
+            viewport.setFlip(true);
+            const flippedConstraints = viewport.getConstrainedBounds(true);
+            assert.strictEqual(flippedConstraints.xConstrained, logicalConstraints.xConstrained,
+                'Horizontal constraint decision is logical, not visually flipped');
+            assert.strictEqual(flippedConstraints.yConstrained, logicalConstraints.yConstrained,
+                'Vertical constraint decision is logical, not visually flipped');
+            Util.assertRectangleEquals(assert, flippedConstraints, logicalConstraints, EPSILON,
+                'Constrained rectangle is identical with and without presentation flip');
+            viewport.applyConstraints(true);
+            Util.assertRectangleEquals(assert, viewport.getBounds(true), expectedBounds, EPSILON,
+                'Applying rotated constraints gives identical bounds with asymmetric margins');
+            done();
+        });
+        viewer.open(DZI_PATH);
+    });
+
     QUnit.test('viewportToImageCoordinates', function(assert) {
         loopingTestHelper(assert, {
             testArray: testPoints,
