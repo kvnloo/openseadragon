@@ -296,10 +296,16 @@ $.extend( $.Navigator.prototype, $.EventSource.prototype, $.Viewer.prototype, /*
      */
     updateSize: function () {
         if ( this.viewport ) {
+            // A hidden navigator has no layout size. Keep the last valid
+            // viewport instead of shrinking it to 1x1 until it is visible.
+            if ( !this.container.clientWidth || !this.container.clientHeight ) {
+                return;
+            }
+
             const containerSize = new $.Point(
-                    (this.container.clientWidth === 0 ? 1 : this.container.clientWidth),
-                    (this.container.clientHeight === 0 ? 1 : this.container.clientHeight)
-                );
+                this.container.clientWidth,
+                this.container.clientHeight
+            );
 
             if ( !containerSize.equals( this.oldContainerSize ) ) {
                 this.viewport.resize( containerSize, true );
