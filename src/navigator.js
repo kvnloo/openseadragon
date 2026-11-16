@@ -270,10 +270,25 @@ $.Navigator = function( options ){
         }
     });
 
-    viewer.world.addHandler("item-index-change", function(event) {
+    let reorderScheduled = false;
+    viewer.world.addHandler("item-index-change", function() {
+        if (reorderScheduled) {
+            return;
+        }
+        reorderScheduled = true;
         window.setTimeout(function(){
-            const item = _this.world.getItemAt(event.previousIndex);
-            _this.world.setItemIndex(item, event.newIndex);
+            reorderScheduled = false;
+            // Preserve the viewer's relative order even while navigator copies are loading.
+            let nextIndex = 0;
+            for (let i = 0; i < viewer.world.getItemCount(); i++) {
+                const item = _this._getMatchingItem(viewer.world.getItemAt(i));
+                if (item) {
+                    if (_this.world.getItemAt(nextIndex) !== item) {
+                        _this.world.setItemIndex(item, nextIndex);
+                    }
+                    nextIndex++;
+                }
+            }
         }, 1);
     });
 
