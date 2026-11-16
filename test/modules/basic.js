@@ -274,7 +274,7 @@
         viewer.open('/test/data/testpattern.dzi');
     });
 
-        QUnit.test('Close', function(assert) {
+    QUnit.test('Close', function(assert) {
         const done = assert.async();
         viewer.addHandler("open", function () {
             const closeHandler = function() {
