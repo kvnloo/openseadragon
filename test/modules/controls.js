@@ -428,7 +428,7 @@
         viewer.open('/test/data/testpattern.dzi');
     });
 
-        QUnit.test('RotateControlOff', function (assert) {
+    QUnit.test('RotateControlOff', function (assert) {
         const done = assert.async();
         const openHandler = function (event) {
             viewer.removeHandler('open', openHandler);
