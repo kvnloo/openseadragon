@@ -479,8 +479,8 @@
         image.viewer = { world: { ensureTilesUpToDate: function() {} } };
         image._providesCoverage = function() { return true; };
         let levels = [];
-        image._updateLevel = function(level, opacity) {
-            levels.push({ level: level, opacity: opacity });
+        image._updateLevel = function(level, opacity, visibility, drawArea, loadArea) {
+            levels.push({ level: level, opacity: opacity, loadArea: loadArea });
             return { tilesToDraw: [], bestLoadTileCandidates: [] };
         };
 
@@ -522,13 +522,77 @@
             image._scaleSpring.current.value = 1;
             levels = [];
             image._updateLevelsForViewport();
-            assert.strictEqual(levels[0].opacity, 0, 'returning to cached level 1 restarts the fade');
+            assert.deepEqual(levels.map(function(info) { return info.level; }), [1, 2],
+                'zoom-out retains outgoing cached level 2 over new level 1');
+            assert.strictEqual(levels[0].opacity, 1, 'incoming lower level is already opaque');
+            assert.strictEqual(levels[1].opacity, 0.6, 'outgoing level starts at previous fade opacity');
+            assert.strictEqual(levels[1].loadArea, null, 'outgoing cached tiles must not be downloaded');
+
+            currentTime = 3300;
+            levels = [];
+            image._updateLevelsForViewport();
+            assert.strictEqual(levels[1].opacity, 0.3, 'outgoing level fades out halfway through');
+
+            currentTime = 3800;
+            levels = [];
+            image._updateLevelsForViewport();
+            assert.deepEqual(levels.map(function(info) { return info.level; }), [1],
+                'expired outgoing level is no longer selected');
         } finally {
             OpenSeadragon.now = originalNow;
         }
     });
 
     // ----------
+    QUnit.test('alwaysBlend zoom-out redraws and retains lower coverage until fade-out ends', function(assert) {
+        const image = Object.create(OpenSeadragon.TiledImage.prototype);
+        image.alwaysBlend = true;
+        image.blendTime = 1;
+        image._alwaysBlendLevel = 1;
+        image._alwaysBlendStart = 2800;
+        image._alwaysBlendOutgoingLevel = 2;
+        image._alwaysBlendOutgoingOpacity = 0.6;
+        image._tilesToDraw = [];
+        image.coverage = {};
+        image._setCoverage = function() {};
+        image._providesCoverage = function() { return true; };
+        image.getDrawArea = function() { return true; };
+
+        const lower = { loaded: true, blendStart: 100, x: 0, y: 0 };
+        const upper = { loaded: true, blendStart: 100, x: 0, y: 0 };
+        const tiles = [
+            { tile: lower, level: 1 },
+            { tile: upper, level: 2 }
+        ];
+        image._tilesToDraw[1] = [tiles[0]];
+        image._tilesToDraw[2] = [tiles[1]];
+
+        const originalNow = OpenSeadragon.now;
+        let currentTime = 2800;
+        OpenSeadragon.now = function() { return currentTime; };
+        try {
+            image._updateTilesInViewport(tiles);
+            assert.strictEqual(lower.opacity, 1, 'new lower level remains fully opaque');
+            assert.strictEqual(upper.opacity, 0.6, 'outgoing cached level preserves its starting opacity');
+            assert.strictEqual(image._isBlending, true, 'fade-out requests redraw even at full opacity');
+            assert.ok(image._tilesToDraw[1], 'outgoing level never prunes the lower backdrop');
+
+            currentTime = 3300;
+            image._updateTilesInViewport(tiles);
+            assert.strictEqual(upper.opacity, 0.3, 'outgoing upper level fades down to 30 percent');
+            assert.strictEqual(lower.opacity, 1, 'new lower level still covers the view');
+
+            currentTime = 3800;
+            image._updateTilesInViewport(tiles);
+            assert.strictEqual(upper.opacity, 0, 'outgoing tile finishes fully transparent');
+            assert.strictEqual(image._tilesToDraw[2], undefined, 'finished outgoing tiles are removed');
+            assert.strictEqual(image._alwaysBlendOutgoingLevel, null, 'outgoing transition state clears');
+            assert.ok(image._tilesToDraw[1], 'new preferred level remains available');
+        } finally {
+            OpenSeadragon.now = originalNow;
+        }
+    });
+
     // ----------
     QUnit.test('rotation', function(assert) {
         const done = assert.async();

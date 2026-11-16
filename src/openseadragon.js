@@ -178,8 +178,9 @@
   *
   * @property {Boolean} [alwaysBlend=false]
   *     Starts a time-based blend when the preferred resolution level changes,
-  *     even for cached tiles. The incoming level becomes fully opaque within
-  *     blendTime seconds instead of remaining partially blended at rest.
+  *     even for cached tiles. When zooming in, the new higher level fades in;
+  *     when zooming out, the previously drawn cached higher level fades out
+  *     over the opaque lower level. Both settle after blendTime seconds.
   *     By default, only newly loaded tiles blend.
   *
   * @property {Boolean} [autoHideControls=true]
