@@ -451,6 +451,89 @@
         viewer.open(DZI_PATH);
     });
 
+
+    QUnit.test('goHome keeps image edges inside at odd sizes and pixel densities', function(assert) {
+        const done = assert.async();
+        const originalPixelDensityRatio = OpenSeadragon.pixelDensityRatio;
+        const sizes = [
+            [800, 600],
+            [801, 601],
+            [800, 601],
+            [601, 801]
+        ];
+        const images = [
+            { path: TALL_PATH, edge: 'bottom' },
+            { path: WIDE_PATH, edge: 'right' }
+        ];
+        const cases = [];
+        [1, 2].forEach(function(density) {
+            sizes.forEach(function(size) {
+                images.forEach(function(image) {
+                    cases.push({
+                        width: size[0],
+                        height: size[1],
+                        density: density,
+                        path: image.path,
+                        edge: image.edge
+                    });
+                });
+            });
+        });
+
+        viewer.destroy();
+        viewer = null;
+        let index = 0;
+
+        function checkNext() {
+            if (index === cases.length) {
+                OpenSeadragon.pixelDensityRatio = originalPixelDensityRatio;
+                done();
+                return;
+            }
+
+            const testCase = cases[index++];
+            $('#example').css({
+                width: testCase.width + 'px',
+                height: testCase.height + 'px'
+            });
+            OpenSeadragon.pixelDensityRatio = testCase.density;
+            viewer = OpenSeadragon({
+                id: VIEWER_ID,
+                prefixUrl: PREFIX_URL,
+                springStiffness: SPRING_STIFFNESS
+            });
+            viewer.addOnceHandler('open', function() {
+                const viewport = viewer.viewport;
+                viewport.goHome(true);
+                const image = viewer.world.getItemAt(0);
+                const bounds = image.getBounds(true);
+                const corner = viewport.pixelFromPoint(bounds.getBottomRight(), true);
+                const container = viewport.getContainerSize();
+                const label = testCase.path + ' at ' + testCase.width + 'x' +
+                    testCase.height + ' density ' + testCase.density;
+
+                assert.strictEqual(container.x, testCase.width, label + ' width');
+                assert.strictEqual(container.y, testCase.height, label + ' height');
+                assert.ok(
+                    corner.x >= 0 && corner.x <= container.x &&
+                    corner.y >= 0 && corner.y <= container.y,
+                    label + ' bottom-right fits: ' + corner.toString()
+                );
+                const edgePixel = testCase.edge === 'bottom' ? corner.y : corner.x;
+                const edgeSize = testCase.edge === 'bottom' ? container.y : container.x;
+                assert.ok(Math.abs(edgePixel - edgeSize) < 0.5,
+                    label + ' meets the ' + testCase.edge + ' edge');
+
+                viewer.destroy();
+                viewer = null;
+                checkNext();
+            });
+            viewer.open(testCase.path);
+        }
+
+        checkNext();
+    });
+
     QUnit.test('ensureVisible', function(assert) {
         const done = assert.async();
         const openHandler = function(event) {

@@ -257,6 +257,12 @@ $.Viewport.prototype = {
             output = aspectFactor >= 1 ? 1 : aspectFactor;
         }
 
+        // Leave a subpixel safety margin so edge-aligned image pixels do not
+        // round outside the container when fitted to a different aspect ratio.
+        if (!this.homeFillsViewer && aspectFactor !== 1) {
+            output *= 1 - 2 * Number.EPSILON;
+        }
+
         return output / this._contentBounds.width;
     },
 
