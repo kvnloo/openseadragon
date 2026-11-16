@@ -197,6 +197,143 @@
             });
         }
 
+
+            QUnit.test('flipped 45-degree margined mouse and touch pointer map to image pixels', function(assert) {
+                const done = assert.async();
+                const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000">' +
+                    '<rect width="1000" height="1000" fill="white"/>' +
+                    '<path d="M375 0V1000" stroke="blue"/>' +
+                    '<path d="M625 0V1000" stroke="red"/>' +
+                    '</svg>';
+                createViewer();
+
+                viewer.addOnceHandler('open', function() {
+                    const Point = OpenSeadragon.Point;
+                    const viewport = viewer.viewport;
+                    const center = new Point(0.5, 0.5);
+                    const size = viewport.getContainerSize();
+                    const margins = {
+                        left: size.x / 10,
+                        top: size.y / 8,
+                        right: size.x / 5,
+                        bottom: size.y / 6
+                    };
+                    const innerWidth = size.x - margins.left - margins.right;
+                    const innerHeight = size.y - margins.top - margins.bottom;
+                    const pixel = new Point(size.x / 4, size.y / 2);
+                    const imageTolerance = 1000 / (2 * innerWidth);
+                    viewport.setMargins(margins);
+                    viewport.setRotation(45, true);
+                    viewport.zoomTo(2, null, true);
+                    viewport.panTo(center, true);
+                    viewport.setFlip(true);
+                    viewer.gestureSettingsTouch.clickToZoom = true;
+                    viewer.gestureSettingsTouch.zoomToRefPoint = true;
+
+                    // Independent geometry oracle: undo the *visual* x reflection,
+                    // remove margins, divide by zoom, then undo 45-degree rotation.
+                    const dx = (size.x - pixel.x - margins.left - innerWidth / 2) / (2 * innerWidth);
+                    const dy = (pixel.y - margins.top - innerHeight / 2) / (2 * innerWidth);
+                    const expectedWorld = new Point(
+                        center.x + (dx + dy) / Math.SQRT2,
+                        center.y + (dy - dx) / Math.SQRT2
+                    );
+                    const expectedImage = expectedWorld.times(1000);
+                    assert.strictEqual(viewer.drawer.getType(), drawerType, 'requested renderer is active');
+                    assert.deepEqual(viewer.world.getItemAt(0).getContentSize(),
+                        new Point(1000, 1000), 'real 1000px image is open');
+                    assert.ok(Math.abs(viewport.pointFromPixel(pixel, true).x - expectedWorld.x) < 1e-10,
+                        'mirrored physical x maps to the rotated, margined world x');
+                    assert.ok(Math.abs(viewport.pointFromPixel(pixel, true).y - expectedWorld.y) < 1e-10,
+                        'rotated, margined world y is independently correct');
+
+                    const canvas = $(viewer.canvas);
+                    const offset = canvas.offset();
+                    const clientX = offset.left + pixel.x;
+                    const clientY = offset.top + pixel.y;
+
+                    function exercisePointer(label, dispatch) {
+                        viewport.zoomTo(2, null, true);
+                        viewport.panTo(center, true);
+                        let click;
+                        let zoomReference;
+                        let zoomCount = 0;
+                        const originalZoomBy = viewport.zoomBy;
+                        viewer.addOnceHandler('canvas-click', function(event) {
+                            click = {
+                                position: event.position.clone(),
+                                image: viewport.viewerElementToImageCoordinates(event.position),
+                                quick: event.quick,
+                                pointerType: event.originalEvent.pointerType
+                            };
+                        });
+                        viewport.zoomBy = function(factor, reference) {
+                            zoomCount++;
+                            zoomReference = reference ? reference.clone() : null;
+                            return originalZoomBy.apply(this, arguments);
+                        };
+                        try {
+                            dispatch();
+                        } finally {
+                            viewport.zoomBy = originalZoomBy;
+                        }
+
+                        assert.ok(click, label + ' is delivered by MouseTracker');
+                        if (click) {
+                            assert.ok(click.quick, label + ' completes a quick press/release');
+                            assert.ok(Math.abs(click.position.x - pixel.x) < 1 &&
+                                Math.abs(click.position.y - pixel.y) < 1,
+                            label + ' preserves the physical canvas position');
+                            assert.ok(Math.abs(click.image.x - expectedImage.x) < imageTolerance &&
+                                Math.abs(click.image.y - expectedImage.y) < imageTolerance,
+                            label + ' selects the independently computed image point');
+                            if (label === 'touch') {
+                                assert.strictEqual(click.pointerType, 'touch',
+                                    'touch PointerEvent stays on the touch gesture path');
+                            }
+                        }
+                        assert.strictEqual(zoomCount, 1, label + ' invokes one click zoom');
+                        assert.ok(zoomReference &&
+                            Math.abs(zoomReference.x - expectedWorld.x) < imageTolerance / 1000 &&
+                            Math.abs(zoomReference.y - expectedWorld.y) < imageTolerance / 1000,
+                        label + ' zoom reference is the same rotated image point');
+                    }
+
+                    exercisePointer('mouse', function() {
+                        const mouse = { button: 0, clientX: clientX, clientY: clientY };
+                        canvas.simulate('mouseenter', mouse)
+                            .simulate('mousedown', mouse)
+                            .simulate('mouseup', mouse);
+                    });
+                    exercisePointer('touch', function() {
+                        const down = {
+                            bubbles: true,
+                            cancelable: true,
+                            pointerId: 41,
+                            pointerType: 'touch',
+                            isPrimary: true,
+                            button: 0,
+                            buttons: 1,
+                            clientX: clientX,
+                            clientY: clientY
+                        };
+                        viewer.canvas.dispatchEvent(new PointerEvent('pointerdown', down));
+                        viewer.canvas.dispatchEvent(new PointerEvent('pointerup',
+                            Object.assign({}, down, { buttons: 0 })));
+                    });
+                    done();
+                });
+                viewer.addOnceHandler('open-failed', function(event) {
+                    assert.ok(false, 'Inline image did not open: ' + event.message);
+                    done();
+                });
+                viewer.open({
+                    type: 'image',
+                    url: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg),
+                    buildPyramid: false
+                });
+            });
+
         // ----------
         // ----------
         QUnit.test('isWebGL2', function(assert) {
