@@ -277,5 +277,145 @@
                 });
             });
         });
+
+        // #2266: two registered opaque PNG images must not expose the lower image
+        // through the right or bottom edge at fractional positions.
+        if (drawerType === 'canvas') {
+            QUnit.test('registered PNG layers hide the lower image at subpixel edges', function(assert) {
+                const done = assert.async();
+                const imageWidth = 512;
+                const imageHeight = 384;
+                const density = OpenSeadragon.pixelDensityRatio;
+
+                function solidImageUrl(color) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = imageWidth;
+                    canvas.height = imageHeight;
+                    const context = canvas.getContext('2d');
+                    context.fillStyle = color;
+                    context.fillRect(0, 0, imageWidth, imageHeight);
+                    return canvas.toDataURL('image/png');
+                }
+
+                // Keep both sources on the same image bounds, with no fade between
+                // pyramid levels. Force the CanvasDrawer, not the default WebGL drawer.
+                viewer.blendTime = 0;
+                const neverRound = OpenSeadragon.SUBPIXEL_ROUNDING_OCCURRENCES.NEVER;
+                const states = [];
+                [0.68, 0.79, 0.90].forEach(function(zoom) {
+                    states.push({zoom: zoom, panX: 0, panY: 0});
+                    states.push({zoom: zoom, panX: 0.013, panY: -0.011});
+                    states.push({zoom: zoom, panX: -0.017, panY: 0.009});
+                });
+
+                viewer.addOnceHandler('open', function() {
+                    assert.strictEqual(viewer.drawer.getType(), 'canvas', 'uses the CanvasDrawer');
+                    assert.strictEqual(viewer.world.getItemCount(), 2, 'two separate TiledImages opened');
+                    const lower = viewer.world.getItemAt(0);
+                    const upper = viewer.world.getItemAt(1);
+                    assert.propEqual(lower.getBoundsNoRotate(true), upper.getBoundsNoRotate(true),
+                        'the lower red and upper blue images have identical registered bounds');
+
+                    function inspectState(index) {
+                        if (index === states.length) {
+                            done();
+                            return;
+                        }
+
+                        const state = states[index];
+                        const label = 'zoom ' + state.zoom + ', pan (' + state.panX + ', ' + state.panY + ')';
+                        viewer.viewport.zoomTo(state.zoom, null, true);
+                        viewer.viewport.panTo(new OpenSeadragon.Point(
+                            0.5 + state.panX, 0.375 + state.panY), true);
+
+                        function onTopDraw(event) {
+                            // A loaded image at the previous zoom is not evidence
+                            // that both sources have finished loading the new level.
+                            if (event.tiledImage !== upper || !viewer.getFullyLoaded()) {
+                                return;
+                            }
+                            viewer.removeHandler('tiled-image-drawn', onTopDraw);
+
+                            const canvas = viewer.drawer.canvas;
+                            const context = viewer.drawer.context;
+                            const bounds = upper.getBoundsNoRotate(true);
+                            const topLeft = viewer.viewport.pixelFromPointNoRotate(
+                                bounds.getTopLeft(), true).times(density);
+                            const bottomRight = viewer.viewport.pixelFromPointNoRotate(
+                                bounds.getBottomRight(), true).times(density);
+                            const midX = Math.floor((topLeft.x + bottomRight.x) / 2);
+                            const midY = Math.floor((topLeft.y + bottomRight.y) / 2);
+                            const rightX = Math.floor(bottomRight.x);
+                            const bottomY = Math.floor(bottomRight.y);
+
+                            assert.ok(rightX > 3 && rightX + 2 < canvas.width &&
+                                bottomY > 3 && bottomY + 2 < canvas.height,
+                                label + ': right and bottom edges remain in the canvas');
+                            assert.ok(viewer.drawer.sketchCanvas,
+                                label + ': upper PNG renders through the sketch canvas');
+
+                            const center = context.getImageData(midX, midY, 1, 1).data;
+                            assert.deepEqual(Array.from(center), [0, 0, 255, 255],
+                                label + ': upper blue image is fully drawn in the center');
+
+                            const right = {red: 0, x: 0, y: 0};
+                            const bottom = {red: 0, x: 0, y: 0};
+                            [0.25, 0.5, 0.75].forEach(function(fraction) {
+                                const y = Math.floor(topLeft.y + (bottomRight.y - topLeft.y) * fraction);
+                                const x = Math.floor(topLeft.x + (bottomRight.x - topLeft.x) * fraction);
+                                for (let offset = -2; offset <= 2; offset++) {
+                                    const edgeX = rightX + offset;
+                                    const edgeY = bottomY + offset;
+                                    const rightRed = context.getImageData(edgeX, y, 1, 1).data[0];
+                                    const bottomRed = context.getImageData(x, edgeY, 1, 1).data[0];
+                                    if (rightRed > right.red) {
+                                        right.red = rightRed;
+                                        right.x = edgeX;
+                                        right.y = y;
+                                    }
+                                    if (bottomRed > bottom.red) {
+                                        bottom.red = bottomRed;
+                                        bottom.x = x;
+                                        bottom.y = edgeY;
+                                    }
+                                }
+                            });
+
+                            // A fully opaque blue top layer must not show red through
+                            // either outer edge. Allow only 2/255 readback quantization.
+                            assert.ok(right.red <= 2, label + ': right edge red=' + right.red +
+                                ' at (' + right.x + ', ' + right.y + ')');
+                            assert.ok(bottom.red <= 2, label + ': bottom edge red=' + bottom.red +
+                                ' at (' + bottom.x + ', ' + bottom.y + ')');
+
+                            // Let the completed draw frame return before changing the view.
+                            setTimeout(function() {
+                                inspectState(index + 1);
+                            }, 0);
+                        }
+
+                        viewer.addHandler('tiled-image-drawn', onTopDraw);
+                        viewer.forceRedraw();
+                    }
+
+                    viewer.whenFullyLoaded(function() {
+                        inspectState(0);
+                    });
+                });
+
+                viewer.open([
+                    {
+                        tileSource: {type: 'image', url: solidImageUrl('#ff0000'), buildPyramid: true},
+                        x: 0, y: 0, width: 1, opacity: 1,
+                        subPixelRoundingForTransparency: neverRound
+                    },
+                    {
+                        tileSource: {type: 'image', url: solidImageUrl('#0000ff'), buildPyramid: true},
+                        x: 0, y: 0, width: 1, opacity: 1,
+                        subPixelRoundingForTransparency: neverRound
+                    }
+                ]);
+            });
+        }
     }
 })();
