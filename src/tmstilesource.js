@@ -45,6 +45,8 @@
 /**
  * @class TmsTileSource
  * @classdesc A tilesource implementation for Tiled Map Services (TMS).
+ * The optional levelOffset (default 0) maps OpenSeadragon zoom levels to
+ * TMS servers whose zoom numbering starts at a different level.
  * TMS tile scheme ( [ as supported by OpenLayers ] is described here
  * ( http://openlayers.org/dev/examples/tms.html ).
  *
@@ -130,7 +132,7 @@ $.extend( $.TmsTileSource.prototype, $.TileSource.prototype, /** @lends OpenSead
         // Convert from Deep Zoom definition to TMS zoom definition
         const yTiles = this.getNumTiles( level ).y - 1;
 
-        return this.tilesUrl + level + "/" + x + "/" + (yTiles - y) + ".png";
+        return this.tilesUrl + (level + (this.levelOffset || 0)) + "/" + x + "/" + (yTiles - y) + ".png";
     },
 
     /**
