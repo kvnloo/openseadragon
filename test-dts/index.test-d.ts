@@ -6,15 +6,18 @@ const viewer = OpenSeadragon({ id: "viewer" });
 expectType<OpenSeadragon.Viewer>(viewer);
 expectType<OpenSeadragon.Viewer>(OpenSeadragon({ element: document.createElement("div") }));
 expectError(OpenSeadragon({ id: 123 }));
+expectType<OpenSeadragon.Viewer>(OpenSeadragon({
+    id: "shared-viewer",
+    drawer: "webgl",
+    drawerOptions: { webgl: { useSharedRenderer: true } }
+}));
+expectAssignable<OpenSeadragon.WebGLDrawerOptions>({ useSharedRenderer: false });
+expectError<OpenSeadragon.WebGLDrawerOptions>({ useSharedRenderer: "true" });
 expectType<boolean>(viewer.isOpen());
 expectType<boolean>(viewer.isFullPage());
 expectType<OpenSeadragon.Viewer>(viewer.close());
 expectType<OpenSeadragon.Viewer>(OpenSeadragon({ id: "viewer", cooperativeGestures: true }));
 expectType<OpenSeadragon.Viewer>(viewer.setCooperativeGestures(true));
-expectType<OpenSeadragon.Viewer>(OpenSeadragon({ id: "viewer", buttonColors: { icon: "#000" } }));
-expectType<OpenSeadragon.Viewer>(viewer.setButtonColors({ background: "#fff" }));
-expectError(viewer.setButtonColors({ icon: 1 }));
-expectType<OpenSeadragon.Viewer>(OpenSeadragon({ id: "viewer", navImages: { home: { REST: "home_rest.png", GROUP: "home_grouphover.png", HOVER: "home_hover.png", DOWN: "home_pressed.png" } } }));
 viewer.destroy();
 
 // Viewport

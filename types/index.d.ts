@@ -314,8 +314,7 @@ declare namespace OpenSeadragon {
         toolbar?: string | HTMLElement;
         xmlPath?: string;
         prefixUrl?: string;
-        buttonColors?: { background?: string; icon?: string };
-        navImages?: Partial<NavImages>;
+        navImages?: NavImages;
         debugMode?: boolean;
         debugGridColor?: string;
         silenceMultiImageWarnings?: boolean;
@@ -725,6 +724,8 @@ declare namespace OpenSeadragon {
 
     interface WebGLDrawerOptions extends BaseDrawerOptions {
         unpackWithPremultipliedAlpha?: boolean;
+        /** Share an offscreen WebGL context with other opted-in drawers. Default: false. */
+        useSharedRenderer?: boolean;
     }
 
     interface DrawerOptions {
@@ -732,7 +733,7 @@ declare namespace OpenSeadragon {
         canvas?: BaseDrawerOptions;
         html?: BaseDrawerOptions;
         custom?: BaseDrawerOptions;
-        [key: string]: BaseDrawerOptions | undefined;
+        [key: string]: BaseDrawerOptions | WebGLDrawerOptions | undefined;
     }
 
     class DrawerBase {
@@ -1876,7 +1877,6 @@ declare namespace OpenSeadragon {
         setAjaxHeaders(ajaxHeaders: object, propagate?: boolean): void;
         setCooperativeGestures(enabled: boolean): Viewer;
         setDebugMode(debug: boolean): Viewer;
-        setButtonColors(colors: { background?: string; icon?: string }): Viewer;
         setFullPage(fullScreen: boolean): Viewer;
         setFullScreen(fullScreen: boolean): Viewer;
         setKeyboardNavEnabled(enabled: boolean): Viewer;
