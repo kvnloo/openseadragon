@@ -50,6 +50,36 @@
         }
     });
 
+    QUnit.test('Navigator preserves fractional size ratio on create and resize', function(assert) {
+        const viewerElement = $('#example');
+        const sizeRatio = 0.23;
+        viewerElement.css({ width: '503px', height: '317px' });
+
+        viewer = OpenSeadragon({
+            id: 'example',
+            showNavigator: true,
+            navigatorSizeRatio: sizeRatio,
+            navigatorMaintainSizeRatio: true
+        });
+
+        const navigator = viewer.navigator;
+        const assessSize = function(width, height, stage) {
+            const actualWidth = parseFloat(navigator.element.style.width);
+            const actualHeight = parseFloat(navigator.element.style.height);
+            assert.ok(Math.abs(actualWidth - width * sizeRatio) < 0.001,
+                stage + ': width keeps fractional pixels');
+            assert.ok(Math.abs(actualHeight - height * sizeRatio) < 0.001,
+                stage + ': height keeps fractional pixels');
+            assert.ok(Math.abs(actualWidth / actualHeight - width / height) < 0.00001,
+                stage + ': aspect ratio matches viewer');
+        };
+
+        assessSize(503, 317, 'Initial');
+        viewerElement.css({ width: '509px', height: '329px' });
+        navigator.update(viewer.viewport);
+        assessSize(509, 329, 'After resize');
+    });
+
     const assessNavigatorLocation = function (assert, expectedX, expectedY) {
         navigatorElement = navigatorElement || $(".navigator");
         Util.assessNumericValue(assert, navigatorElement.offset().left, expectedX, 10, ' Navigator x Position');
