@@ -264,6 +264,22 @@
         }
     });
 
+    QUnit.test('conversion backpressure is opt-in on the viewer', function (assert) {
+        [undefined, false, true].forEach(function (enabled) {
+            const options = { id: 'example', drawer: 'canvas' };
+            if (enabled !== undefined) {
+                options.conversionBackpressure = enabled;
+            }
+            const instance = OpenSeadragon(options);
+            try {
+                assert.strictEqual(instance.conversionBackpressure, enabled === true,
+                    'viewer preserves opt-in behavior for option ' + enabled);
+            } finally {
+                instance.destroy();
+            }
+        });
+    });
+
     function backpressureFixture(enabled, visible) {
         let area = new OpenSeadragon.Rect(0, 0, 1, 1);
         const image = {
