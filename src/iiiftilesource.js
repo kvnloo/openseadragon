@@ -522,7 +522,11 @@ $.extend( $.IIIFTileSource.prototype, $.TileSource.prototype, /** @lends OpenSea
             } else if ( this.version === 3 ) {
                 iiifSize = levelWidth + "," + levelHeight;
             } else {
-                iiifSize = levelWidth + ",";
+                // A width-only IIIF 1/2 request can round a narrow image's height to zero.
+                // Generated levels must request enough width to retain at least one row.
+                const width = this.levelSizes ? levelWidth :
+                    Math.max( levelWidth, Math.ceil( this.width / this.height ) );
+                iiifSize = width + ",";
             }
             iiifRegion = 'full';
         } else {
