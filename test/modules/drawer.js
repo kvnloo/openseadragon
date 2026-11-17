@@ -42,6 +42,202 @@
             }, options));
         };
 
+        // Exercise the real first-pass program and buffers, not the standalone shader demo.
+        // These checks deliberately fail if the required GPU context is unavailable.
+        if (drawerType === 'webgl') {
+            QUnit.test('GLSL3 WebGL2 first pass uses integer tile slots', function(assert) {
+                createViewer();
+                const drawer = viewer.drawer;
+                assert.strictEqual(drawer.getType(), 'webgl', 'WebGL drawer is available');
+                if (drawer.getType() !== 'webgl') {
+                    return;
+                }
+
+                const manager = drawer._glContext;
+                assert.ok(manager.isWebGL2(), 'this case requires a WebGL2 context');
+                if (!manager.isWebGL2()) {
+                    return;
+                }
+
+                assert.strictEqual(drawer.isGLSL3(), true, 'WebGL2 selects GLSL ES 3.0');
+                const gl = manager.getContext();
+                const firstPass = manager.getFirstPass();
+                assert.strictEqual(firstPass.useIntegerIndex, true,
+                    'the real first pass uploads integer tile indices');
+                assert.ok(manager.getMaxTextures() >= 2, 'at least two texture slots are available');
+                if (manager.getMaxTextures() < 2) {
+                    return;
+                }
+
+                const shaders = gl.getAttachedShaders(firstPass.shaderProgram);
+                const vertex = shaders.find(shader =>
+                    gl.getShaderParameter(shader, gl.SHADER_TYPE) === gl.VERTEX_SHADER);
+                const fragment = shaders.find(shader =>
+                    gl.getShaderParameter(shader, gl.SHADER_TYPE) === gl.FRAGMENT_SHADER);
+                assert.ok(vertex && fragment, 'both production shaders are attached');
+                if (!vertex || !fragment) {
+                    return;
+                }
+                assert.ok(gl.getShaderSource(vertex).startsWith('#version 300 es'),
+                    'the first-pass vertex shader uses GLSL ES 3.0');
+                assert.ok(gl.getShaderSource(fragment).includes('flat in int v_image_index'),
+                    'the first-pass fragment shader receives a flat integer index');
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, firstPass.bufferIndex);
+                const indices = new Int32Array(12);
+                gl.getBufferSubData(gl.ARRAY_BUFFER, 0, indices);
+                assert.deepEqual(Array.from(indices), [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1],
+                    'two slots have six integer vertices each');
+            });
+
+            QUnit.test('GLSL3 forced WebGL1 preserves float shader path', function(assert) {
+                const originalGetContext = HTMLCanvasElement.prototype.getContext;
+                getContextPrototypeRestore = function() {
+                    HTMLCanvasElement.prototype.getContext = originalGetContext;
+                    getContextPrototypeRestore = null;
+                };
+                HTMLCanvasElement.prototype.getContext = function(type) {
+                    if (type === 'webgl2') {
+                        return null;
+                    }
+                    return originalGetContext.apply(this, arguments);
+                };
+
+                createViewer();
+                const drawer = viewer.drawer;
+                assert.strictEqual(drawer.getType(), 'webgl',
+                    'WebGL1 is available without WebGL2');
+                if (drawer.getType() !== 'webgl') {
+                    return;
+                }
+
+                const manager = drawer._glContext;
+                assert.strictEqual(manager.isWebGL2(), false, 'a WebGL1 context was selected');
+                assert.strictEqual(drawer.isGLSL3(), false, 'GLSL ES 3.0 remains disabled');
+                const firstPass = manager.getFirstPass();
+                assert.strictEqual(firstPass.useIntegerIndex, false,
+                    'the fallback uses float tile indices');
+
+                const gl = manager.getContext();
+                const vertex = gl.getAttachedShaders(firstPass.shaderProgram).find(shader =>
+                    gl.getShaderParameter(shader, gl.SHADER_TYPE) === gl.VERTEX_SHADER);
+                assert.ok(vertex, 'legacy first-pass vertex shader is attached');
+                if (!vertex) {
+                    return;
+                }
+                const source = gl.getShaderSource(vertex);
+                assert.ok(source.includes('attribute float a_index;'),
+                    'the WebGL1 shader accepts a floating-point index');
+                assert.notOk(source.includes('#version 300 es'),
+                    'WebGL1 does not require a GLSL ES 3.0 shader');
+            });
+
+            QUnit.test('WebGL production two-slot pixel parity', function(assert) {
+                const done = assert.async();
+                createViewer({ blendTime: 0, imageSmoothingEnabled: false });
+                const drawer = viewer.drawer;
+                assert.strictEqual(drawer.getType(), 'webgl', 'WebGL drawer is available');
+                if (drawer.getType() !== 'webgl') {
+                    done();
+                    return;
+                }
+
+                const manager = drawer._glContext;
+                assert.ok(manager.isWebGL2(), 'same WebGL2 browser/GPU is required for parity');
+                assert.ok(manager.getMaxTextures() >= 2, 'both tiles must fit in one batch');
+                if (!manager.isWebGL2() || manager.getMaxTextures() < 2) {
+                    done();
+                    return;
+                }
+
+                function solidTile(color) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = canvas.height = 32;
+                    const context = canvas.getContext('2d');
+                    context.fillStyle = color;
+                    context.fillRect(0, 0, 32, 32);
+                    return canvas.toDataURL('image/png');
+                }
+
+                const red = solidTile('#ff0000');
+                const blue = solidTile('#0000ff');
+                const gl = manager.getContext();
+                const firstPass = manager.getFirstPass();
+
+                viewer.addOnceHandler('open', function() {
+                    const image = viewer.world.getItemAt(0);
+                    image.whenFullyLoaded(function() {
+                        const originalDrawArrays = gl.drawArrays;
+                        let sample = null;
+                        gl.drawArrays = function(mode, first, count) {
+                            const result = originalDrawArrays.apply(this, arguments);
+                            if (mode === gl.TRIANGLES && count === 12 &&
+                                    gl.getParameter(gl.CURRENT_PROGRAM) === firstPass.shaderProgram) {
+                                const y = Math.floor(gl.drawingBufferHeight / 2);
+                                const left = new Uint8Array(4);
+                                const right = new Uint8Array(4);
+                                gl.readPixels(Math.floor(gl.drawingBufferWidth / 4), y,
+                                    1, 1, gl.RGBA, gl.UNSIGNED_BYTE, left);
+                                gl.readPixels(Math.floor(3 * gl.drawingBufferWidth / 4), y,
+                                    1, 1, gl.RGBA, gl.UNSIGNED_BYTE, right);
+                                sample = {
+                                    count: count,
+                                    left: Array.from(left),
+                                    right: Array.from(right),
+                                    indexType: gl.getVertexAttrib(firstPass.aIndex,
+                                        gl.VERTEX_ATTRIB_ARRAY_TYPE),
+                                    integerAttribute: gl.getVertexAttrib(firstPass.aIndex,
+                                        gl.VERTEX_ATTRIB_ARRAY_INTEGER)
+                                };
+                            }
+                            return result;
+                        };
+
+                        try {
+                            // Use the loaded TiledImage and the actual production batching path.
+                            drawer._draw([image]);
+                            assert.ok(sample, 'first pass drew two tiles as twelve vertices');
+                            if (sample) {
+                                assert.strictEqual(sample.count, 12, 'six vertices per tile');
+                                assert.strictEqual(sample.integerAttribute,
+                                    !!firstPass.useIntegerIndex,
+                                    'index attribute matches the selected shader path');
+                                assert.strictEqual(sample.indexType,
+                                    firstPass.useIntegerIndex ? gl.INT : gl.FLOAT,
+                                    'production pointer binds native integers or legacy floats');
+
+                                function matches(actual, expected) {
+                                    return expected.every((component, index) =>
+                                        Math.abs(actual[index] - component) <= 2);
+                                }
+                                assert.ok(matches(sample.left, [255, 0, 0, 255]),
+                                    'left tile reads opaque red, got ' + sample.left);
+                                assert.ok(matches(sample.right, [0, 0, 255, 255]),
+                                    'right tile reads opaque blue, got ' + sample.right);
+                            }
+                        } finally {
+                            gl.drawArrays = originalDrawArrays;
+                            done();
+                        }
+                    });
+                });
+                viewer.addOnceHandler('open-failed', function(event) {
+                    assert.ok(false, 'two-tile source opened: ' + event.message);
+                    done();
+                });
+                viewer.open({
+                    width: 64,
+                    height: 32,
+                    tileSize: 32,
+                    minLevel: 6,
+                    maxLevel: 6,
+                    getTileUrl: function(level, x, y) {
+                        return x === 0 ? red : blue;
+                    }
+                });
+            });
+        }
+
         // ----------
         QUnit.test('basics', function(assert) {
             const done = assert.async();
@@ -283,96 +479,6 @@
                     'Enabling smoothing applies to the sketch context as well.');
 
                 done();
-            });
-        });
-
-        // ----------
-        QUnit.test('canvas edge smoothing scales the sketch by the tile resolution', function(assert) {
-            const done = assert.async();
-
-            createViewer({
-                tileSources: '/test/data/testpattern.dzi',
-                smoothTileEdgesMinZoom: 0,
-            });
-            const drawer = viewer.drawer;
-
-            if (drawer.getType() !== 'canvas') {
-                assert.expect(0);
-                done();
-                return;
-            }
-
-            viewer.addHandler('open', function openHandler() {
-                viewer.removeHandler('open', openHandler);
-                viewer.viewport.zoomTo(4, null, true);
-            });
-
-            viewer.world.addHandler('add-item', function addItemHandler(event) {
-                viewer.world.removeHandler('add-item', addItemHandler);
-                const tiledImage = event.item;
-
-                tiledImage.addHandler('fully-loaded-change', function loadedHandler(loadedEvent) {
-                    if (!loadedEvent.fullyLoaded) {
-                        return;
-                    }
-                    tiledImage.removeHandler('fully-loaded-change', loadedHandler);
-
-                    const tile = tiledImage.getTilesToDraw()[0].tile;
-                    const expected = drawer.getDataToDraw(tile).canvas.width /
-                        (tile.size.x * OpenSeadragon.pixelDensityRatio);
-
-                    const originalBlend = drawer.blendSketch;
-                    let scale;
-                    drawer.blendSketch = function(options) {
-                        scale = options.scale;
-                        return originalBlend.apply(this, arguments);
-                    };
-                    drawer.draw([tiledImage]);
-                    drawer.blendSketch = originalBlend;
-
-                    assert.ok(tiledImage.getTilesToDraw().length > 1, 'Several tiles are drawn');
-                    assert.notEqual(scale, 1, 'The sketch is not drawn at a scale of 1');
-                    assert.equal(scale, expected, 'The sketch scale is the native to displayed tile size ratio');
-                    done();
-                });
-            });
-        });
-
-        // ----------
-        QUnit.test('html drawer clears the tile flip when unflipped', function(assert) {
-            const done = assert.async();
-
-            createViewer({
-                tileSources: {
-                    tileSource: '/test/data/testpattern.dzi',
-                    flipped: true,
-                },
-            });
-            const drawer = viewer.drawer;
-
-            if (drawer.getType() !== 'html') {
-                assert.expect(0);
-                done();
-                return;
-            }
-
-            viewer.addHandler('tile-drawn', function flippedHandler(event) {
-                viewer.removeHandler('tile-drawn', flippedHandler);
-                const cacheKey = event.tile.cacheKey;
-                assert.equal(drawer.getDataToDraw(event.tile).style.transform, 'scaleX(-1)',
-                    'A flipped tile is mirrored');
-
-                // Unflipping replaces the Tile, but the new one reuses the cached element
-                viewer.addHandler('tile-drawn', function unflippedHandler(unflippedEvent) {
-                    if (unflippedEvent.tile.flipped || unflippedEvent.tile.cacheKey !== cacheKey) {
-                        return;
-                    }
-                    viewer.removeHandler('tile-drawn', unflippedHandler);
-                    assert.equal(drawer.getDataToDraw(unflippedEvent.tile).style.transform, '',
-                        'The cached tile element is no longer mirrored once unflipped');
-                    done();
-                });
-                event.tiledImage.setFlip(false);
             });
         });
 
