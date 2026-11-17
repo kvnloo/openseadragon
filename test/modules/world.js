@@ -249,4 +249,72 @@
         ]);
     });
 
+
+    // ----------
+    QUnit.test('collection mode reflows after reordering and removal', function(assert) {
+        const done = assert.async();
+
+        viewer.destroy();
+        viewer = OpenSeadragon({
+            id: 'example',
+            prefixUrl: '/build/openseadragon/images/',
+            springStiffness: 100,
+            collectionMode: true,
+            collectionLayout: 'horizontal',
+            collectionRows: 1,
+            collectionTileSize: 1,
+            collectionTileMargin: 0.5
+        });
+
+        viewer.addHandler('open', function() {
+            const world = viewer.world;
+            const first = world.getItemAt(0);
+            const second = world.getItemAt(1);
+            const third = world.getItemAt(2);
+
+            // Establish the same exact starting layout on both base and patch.
+            world.arrange({
+                immediately: true,
+                layout: 'horizontal',
+                rows: 1,
+                tileSize: 1,
+                tileMargin: 0.5
+            });
+            assert.deepEqual(
+                [first.getBounds().x, second.getBounds().x, third.getBounds().x],
+                [0, 1.5, 3],
+                'three images begin in equally spaced horizontal slots'
+            );
+
+            world.setItemIndex(first, 2);
+            assert.strictEqual(world.getItemAt(0), second, 'second image is first');
+            assert.strictEqual(world.getItemAt(1), third, 'third image is second');
+            assert.strictEqual(world.getItemAt(2), first, 'first image is last');
+            assert.deepEqual(
+                [second.getBounds().x, third.getBounds().x, first.getBounds().x],
+                [0, 1.5, 3],
+                'reordering updates target positions to match the new order'
+            );
+
+            world.removeItem(second);
+            assert.strictEqual(world.getItemCount(), 2, 'two images remain');
+            assert.strictEqual(world.getItemAt(0), third, 'third image is now first');
+            assert.strictEqual(world.getItemAt(1), first, 'first image is now second');
+            assert.deepEqual(
+                [third.getBounds().x, first.getBounds().x],
+                [0, 1.5],
+                'removal closes the gap without a manual arrange call'
+            );
+            assert.strictEqual(world.getHomeBounds().width, 2.5,
+                'home bounds shrink to the two remaining tiles');
+            done();
+        });
+
+        viewer.open([
+            '/test/data/testpattern.dzi',
+            '/test/data/testpattern.dzi',
+            '/test/data/testpattern.dzi'
+        ]);
+    });
+
 })();

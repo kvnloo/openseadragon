@@ -432,6 +432,19 @@ $.Viewer = function( options ) {
         viewer: this
     });
 
+    // Keep collection positions in sync when the World order changes.
+    const arrangeCollection = function() {
+        if (_this.collectionMode && _this.world.getItemCount()) {
+            _this.world.arrange({
+                rows: _this.collectionRows,
+                columns: _this.collectionColumns,
+                layout: _this.collectionLayout,
+                tileSize: _this.collectionTileSize,
+                tileMargin: _this.collectionTileMargin
+            });
+        }
+    };
+
     this.world.addHandler('add-item', function(event) {
         // For backwards compatibility, we maintain the source property
         _this.source = _this.world.getItemAt(0).source;
@@ -485,6 +498,7 @@ $.Viewer = function( options ) {
         }
 
         THIS[ _this.hash ].forceRedraw = true;
+        arrangeCollection();
     });
 
     this.world.addHandler('metrics-change', function(event) {
@@ -496,6 +510,7 @@ $.Viewer = function( options ) {
     this.world.addHandler('item-index-change', function(event) {
         // For backwards compatibility, we maintain the source property
         _this.source = _this.world.getItemAt(0).source;
+        arrangeCollection();
     });
 
     // Create the viewport
