@@ -1120,8 +1120,8 @@
         viewer.addOnceHandler('open', function() {
             waitForViewer(assert, function() {
                 assessDisplayRegion(assert, 'Before hiding the viewer');
-                assert.ok(viewer.navigator.oldContainerSize.x > 1 &&
-                    viewer.navigator.oldContainerSize.y > 1, 'Navigator starts at a visible size');
+                const initialSize = viewer.navigator.viewport.getContainerSize();
+                assert.ok(initialSize.x > 1 && initialSize.y > 1, 'Navigator starts at a visible size');
 
                 $viewerElement.hide();
                 assert.strictEqual(viewer.navigator.container.clientWidth, 0, 'Hidden navigator has no layout width');
@@ -1130,6 +1130,8 @@
                 // A size notification while the enclosing tab is hidden must not
                 // replace the last valid navigator viewport with a 1x1 viewport.
                 viewer.navigator.updateSize();
+                assert.deepEqual(viewer.navigator.viewport.getContainerSize(), initialSize,
+                    'Hidden navigator preserves its last visible viewport size');
                 viewer.viewport.zoomTo(viewer.viewport.getZoom() * 1.5, null, true);
                 viewer.viewport.panTo(new OpenSeadragon.Point(0.4, 0.3), true);
 
@@ -1138,9 +1140,10 @@
                 viewer.forceRedraw();
 
                 waitForViewer(assert, function() {
-                    assert.strictEqual(viewer.navigator.oldContainerSize.x,
+                    const restoredSize = viewer.navigator.viewport.getContainerSize();
+                    assert.strictEqual(restoredSize.x,
                         viewer.navigator.container.clientWidth, 'Navigator layout width is restored');
-                    assert.strictEqual(viewer.navigator.oldContainerSize.y,
+                    assert.strictEqual(restoredSize.y,
                         viewer.navigator.container.clientHeight, 'Navigator layout height is restored');
                     assert.ok(displayRegion.width() > 10, 'Display region is not a collapsed dot');
                     assert.ok(displayRegion.height() > 10, 'Display region has a visible height');
