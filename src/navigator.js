@@ -552,9 +552,7 @@ function onCanvasClick( event ) {
    this.viewer.raiseEvent('navigator-click', canvasClickEventArgs);
 
    if ( !canvasClickEventArgs.preventDefaultAction && event.quick && this.viewer.viewport && (this.panVertical || this.panHorizontal)) {
-    if(this.viewer.viewport.flipped) {
-      event.position.x = this.viewport.getContainerSize().x - event.position.x;
-    }
+    // The navigator viewport handles its own flip in pointFromPixel.
     const target = this.viewport.pointFromPixel(event.position);
     if (!this.panVertical) {
       // perform only horizonal pan
