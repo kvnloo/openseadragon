@@ -225,6 +225,21 @@
         viewer.open('/test/data/testpattern.dzi');
     });
 
+    QUnit.test('FullPage ignores late changes after destroy (#1714)', function(assert) {
+        const staleViewer = viewer;
+        staleViewer.destroy();
+        viewer = null;
+
+        assert.notOk(staleViewer.isFullPage(), 'destroyed viewer has no full-page state');
+        assert.strictEqual(staleViewer.setFullPage(false), staleViewer,
+            'late full-page exit is safe and remains chainable');
+        assert.strictEqual(staleViewer.setFullPage(true), staleViewer,
+            'late full-page entry does not reinitialize a destroyed viewer');
+        assert.strictEqual(staleViewer.element, null, 'host element remains released');
+        assert.equal($('#example').children().length, 0,
+            'late full-page calls do not recreate viewer elements');
+    });
+
     QUnit.test('FullScreen', function(assert) {
         if (!OpenSeadragon.supportsFullScreen) {
             const done = assert.async();
