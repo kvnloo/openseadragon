@@ -287,6 +287,70 @@
         });
 
         // ----------
+        if (drawerType === 'canvas') {
+            QUnit.test('single-tile draw skips unused edge-smoothing zoom', function(assert) {
+                const done = assert.async();
+                createViewer();
+
+                viewer.addOnceHandler('open', function() {
+                    viewer.whenFullyLoaded(function() {
+                        const tiledImage = viewer.world.getItemAt(0);
+                        const drawer = viewer.drawer;
+                        const tileInfo = tiledImage.getTilesToDraw()[0];
+                        assert.ok(tileInfo, 'the loaded fixture has a drawable tile');
+                        if (!tileInfo) {
+                            done();
+                            return;
+                        }
+
+                        const originalGetTilesToDraw = tiledImage.getTilesToDraw;
+                        const originalViewportToImageZoom = tiledImage.viewportToImageZoom;
+                        const originalDrawTile = drawer._drawTile;
+                        const drawnTiles = [];
+                        let zoomConversions = 0;
+                        let eventTiles;
+                        const onImageDrawn = function(event) {
+                            if (event.tiledImage === tiledImage) {
+                                eventTiles = event.tiles;
+                            }
+                        };
+
+                        viewer.addHandler('tiled-image-drawn', onImageDrawn);
+                        try {
+                            // Force the one-tile path even when the normal viewport has many tiles.
+                            tiledImage.getTilesToDraw = function() {
+                                return [tileInfo];
+                            };
+                            tiledImage.viewportToImageZoom = function() {
+                                zoomConversions++;
+                                return originalViewportToImageZoom.apply(this, arguments);
+                            };
+                            drawer._drawTile = function(tile) {
+                                drawnTiles.push(tile);
+                                return originalDrawTile.apply(this, arguments);
+                            };
+
+                            drawer._drawTiles(tiledImage);
+                        } finally {
+                            tiledImage.getTilesToDraw = originalGetTilesToDraw;
+                            tiledImage.viewportToImageZoom = originalViewportToImageZoom;
+                            drawer._drawTile = originalDrawTile;
+                            viewer.removeHandler('tiled-image-drawn', onImageDrawn);
+                        }
+
+                        assert.strictEqual(zoomConversions, 0,
+                            'single tile avoids the image zoom conversion used only for edge smoothing');
+                        assert.deepEqual(drawnTiles, [tileInfo.tile], 'the same tile is still painted');
+                        assert.deepEqual(eventTiles, [tileInfo.tile],
+                            'tiled-image-drawn still reports the painted tile');
+                        done();
+                    });
+                });
+                viewer.open('/test/data/testpattern.dzi');
+            });
+        }
+
+        // ----------
         QUnit.test('canvas edge smoothing scales the sketch by the tile resolution', function(assert) {
             const done = assert.async();
 
