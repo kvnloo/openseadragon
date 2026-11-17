@@ -45,6 +45,22 @@
     });
 
     // ----------
+    QUnit.test('single string source is one sequence page', function(assert) {
+        const source = '/test/data/tall.dzi';
+        createViewer({
+            sequenceMode: true,
+            showReferenceStrip: true,
+            tileSources: source
+        });
+
+        assert.deepEqual(viewer.tileSources, [source], 'the URL is one source, not one page per character');
+        assert.strictEqual(viewer.currentPage(), 0, 'starts on its only page');
+
+        viewer.goToNextPage();
+        assert.strictEqual(viewer.currentPage(), 0, 'next page does not open a character from the URL');
+    });
+
+    // ----------
     QUnit.test('shadow dom', function(assert) {
         if (document.head && document.head.attachShadow) {
             const done = assert.async();
