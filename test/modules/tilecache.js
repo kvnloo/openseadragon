@@ -264,6 +264,136 @@
         }
     });
 
+    function backpressureFixture(enabled, visible) {
+        let area = new OpenSeadragon.Rect(0, 0, 1, 1);
+        const image = {
+            viewer: { conversionBackpressure: enabled },
+            getDrawArea: function () { return area; }
+        };
+        const tile = {
+            bounds: visible ? new OpenSeadragon.Rect(0.2, 0.2, 0.2, 0.2) :
+                new OpenSeadragon.Rect(2, 2, 0.2, 0.2),
+            tiledImage: image
+        };
+        const cache = new OpenSeadragon.CacheRecord();
+        cache.withTileReference(tile);
+        cache.addTile(tile, 10, T_A);
+        return {
+            cache: cache,
+            image: image,
+            drawer: {
+                getRequiredDataFormats: function () { return [T_B]; },
+                options: { usePrivateCache: false, preloadCache: false }
+            },
+            setArea: function (rect) { area = rect; }
+        };
+    }
+
+    QUnit.test('stale conversion waits for idle and reuses one queued job', async function (assert) {
+        const previousRequest = window.requestIdleCallback;
+        const previousCancel = window.cancelIdleCallback;
+        const callbacks = [];
+        const canceled = [];
+        window.requestIdleCallback = function (fn, options) {
+            assert.strictEqual(options.timeout, 200, 'idle callback is time-bounded');
+            callbacks.push(fn);
+            return callbacks.length;
+        };
+        window.cancelIdleCallback = function (id) { canceled.push(id); };
+        const record = backpressureFixture(true, false);
+        try {
+            const one = record.cache.prepareForRendering(record.drawer);
+            const two = record.cache.prepareForRendering(record.drawer);
+            assert.strictEqual(one, two, 'duplicate requests share the same promise');
+            assert.strictEqual(callbacks.length, 1, 'only one idle callback is queued');
+            assert.strictEqual(typeAtoB, 0, 'offscreen work is not run eagerly');
+            callbacks[0]();
+            await one;
+            assert.strictEqual(typeAtoB, 1, 'queued job converts exactly once');
+            assert.strictEqual(record.cache.data, 11, 'converted tile remains usable');
+            assert.deepEqual(canceled, [1], 'scheduled callback is retired');
+        } finally {
+            record.cache.destroy();
+            window.requestIdleCallback = previousRequest;
+            window.cancelIdleCallback = previousCancel;
+        }
+    });
+
+    QUnit.test('newly visible tile promotes pending conversion', async function (assert) {
+        const previousRequest = window.requestIdleCallback;
+        const previousCancel = window.cancelIdleCallback;
+        const callbacks = [];
+        let canceled = 0;
+        window.requestIdleCallback = function (fn) {
+            callbacks.push(fn);
+            return callbacks.length;
+        };
+        window.cancelIdleCallback = function () { canceled++; };
+        const record = backpressureFixture(true, false);
+        try {
+            const queued = record.cache.prepareForRendering(record.drawer);
+            assert.strictEqual(typeAtoB, 0, 'originally offscreen');
+            record.setArea(new OpenSeadragon.Rect(1.9, 1.9, 1, 1));
+            const promoted = record.cache.prepareForRendering(record.drawer);
+            assert.strictEqual(queued, promoted, 'promotion retains the first promise');
+            assert.strictEqual(typeAtoB, 1, 'conversion starts as soon as visible');
+            assert.strictEqual(canceled, 1, 'idle callback canceled on promotion');
+            callbacks[0]();
+            await promoted;
+            assert.strictEqual(typeAtoB, 1, 'stale callback cannot convert twice');
+        } finally {
+            record.cache.destroy();
+            window.requestIdleCallback = previousRequest;
+            window.cancelIdleCallback = previousCancel;
+        }
+    });
+
+    QUnit.test('option off and shared visible tile remain foreground', async function (assert) {
+        const defaultMode = backpressureFixture(undefined, false);
+        try {
+            await defaultMode.cache.prepareForRendering(defaultMode.drawer);
+            assert.strictEqual(typeAtoB, 1, 'unset option preserves eager conversion');
+        } finally {
+            defaultMode.cache.destroy();
+        }
+
+        const shared = backpressureFixture(true, false);
+        shared.cache.addTile({
+            tiledImage: shared.image,
+            bounds: new OpenSeadragon.Rect(0.25, 0.25, 0.2, 0.2)
+        }, null, T_A);
+        try {
+            await shared.cache.prepareForRendering(shared.drawer);
+            assert.strictEqual(typeAtoB, 2, 'any visible owner prevents deferral');
+        } finally {
+            shared.cache.destroy();
+        }
+    });
+
+    QUnit.test('eviction cancels the idle job and resolves tile completion', async function (assert) {
+        const previousRequest = window.requestIdleCallback;
+        const previousCancel = window.cancelIdleCallback;
+        let callback;
+        let canceled = false;
+        window.requestIdleCallback = function (fn) { callback = fn; return 42; };
+        window.cancelIdleCallback = function (id) {
+            assert.strictEqual(id, 42, 'cancels the correct callback');
+            canceled = true;
+        };
+        const record = backpressureFixture(true, false);
+        try {
+            const pending = record.cache.prepareForRendering(record.drawer);
+            record.cache.destroy();
+            assert.strictEqual(await pending, undefined, 'no hung promise after disposal');
+            assert.strictEqual(canceled, true, 'scheduled idle work is canceled');
+            callback();
+            assert.strictEqual(typeAtoB, 0, 'destroyed cache is never converted');
+        } finally {
+            window.requestIdleCallback = previousRequest;
+            window.cancelIdleCallback = previousCancel;
+        }
+    });
+
     // ----------
     QUnit.test('basics', function (assert) {
         const done = assert.async();

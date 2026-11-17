@@ -302,29 +302,151 @@
          *  or null if not data yet loaded/ready (usually due to error)
          */
         prepareForRendering(drawer) {
-            const supportedTypes = drawer.getRequiredDataFormats();
+            const pending = this._deferredRender;
+            if (pending) {
+                // A previously stale tile can become visible before the idle task starts.
+                // Promote that existing job without duplicating a conversion.
+                if (!this._shouldDeferRendering()) {
+                    pending.start();
+                }
+                if (pending.drawer === drawer) {
+                    return pending.promise;
+                }
+                return pending.promise.then(() => this.prepareForRendering(drawer));
+            }
 
-            // If not loaded, await until ready and try again
             if (!this.loaded) {
-                return this.await().then(_ => this.prepareForRendering(drawer));
+                return this.await().then(() => this.prepareForRendering(drawer));
+            }
+
+            const supportedTypes = drawer.getRequiredDataFormats();
+            const needsWork = !supportedTypes.includes(this.type) ||
+                (drawer.options.usePrivateCache && drawer.options.preloadCache &&
+                    !this.isUsableForDrawer(drawer));
+            if (needsWork && this._shouldDeferRendering()) {
+                return this._deferForRendering(drawer);
+            }
+            return this._prepareForRenderingNow(drawer);
+        }
+
+        /**
+         * Check the current viewport (not stale last-drawn membership). Records can be
+         * shared by multiple tiles; any visible or unrecognized consumer stays foreground.
+         * @private
+         */
+        _shouldDeferRendering() {
+            if (!this._tiles || this._tiles.length === 0) {
+                return false;
+            }
+            for (const tile of this._tiles) {
+                const image = tile && tile.tiledImage;
+                const viewer = image && image.viewer;
+                if (!viewer || !viewer.conversionBackpressure || !tile.bounds ||
+                    typeof image.getDrawArea !== "function" ||
+                    (typeof viewer.isDestroyed === "function" && viewer.isDestroyed())) {
+                    return false;
+                }
+                let drawArea;
+                try {
+                    drawArea = image.getDrawArea();
+                } catch (error) {
+                    return false;
+                }
+                if (drawArea && drawArea.intersection(tile.bounds)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /**
+         * Yield off-viewport conversion and async cache preparation to idle time.
+         * The bounded deadline and timer fallback guarantee eventual tile completion.
+         * The source bytes remain owned by this CacheRecord during the wait.
+         * @private
+         */
+        _deferForRendering(drawer) {
+            let resolveDeferred;
+            let rejectDeferred;
+            const promise = new $.Promise((resolve, reject) => {
+                resolveDeferred = resolve;
+                rejectDeferred = reject;
+            });
+            const job = {
+                drawer: drawer,
+                promise: promise,
+                cancel: null,
+                start: () => {
+                    if (this._deferredRender !== job) {
+                        return;
+                    }
+                    this._deferredRender = null;
+                    if (job.cancel) {
+                        job.cancel();
+                    }
+                    if (this._destroyed) {
+                        resolveDeferred(undefined);
+                        return;
+                    }
+                    let result;
+                    try {
+                        result = this._prepareForRenderingNow(drawer);
+                    } catch (error) {
+                        rejectDeferred(error);
+                        return;
+                    }
+                    result.then(resolveDeferred, rejectDeferred);
+                },
+                release: () => {
+                    if (this._deferredRender !== job) {
+                        return;
+                    }
+                    this._deferredRender = null;
+                    if (job.cancel) {
+                        job.cancel();
+                    }
+                    resolveDeferred(undefined);
+                }
+            };
+            this._deferredRender = job;
+            if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+                const id = window.requestIdleCallback(job.start, { timeout: 200 });
+                job.cancel = () => {
+                    if (typeof window.cancelIdleCallback === "function") {
+                        window.cancelIdleCallback(id);
+                    }
+                };
+            } else {
+                const id = setTimeout(job.start, 32);
+                job.cancel = () => clearTimeout(id);
+            }
+            return promise;
+        }
+
+        /**
+         * Normal cache preparation, invoked only after the job is admitted.
+         * @private
+         */
+        _prepareForRenderingNow(drawer) {
+            const supportedTypes = drawer.getRequiredDataFormats();
+            if (!this.loaded) {
+                return this.await().then(() => this.prepareForRendering(drawer));
             }
 
             let selfPromise;
-            // If not in one of required types, transform
             if (!supportedTypes.includes(this.type)) {
                 selfPromise = this.transformTo(supportedTypes);
             } else {
                 selfPromise = this.await();
             }
 
-            const swallow = (p) => p.catch(e => {
-                this._handleConversionError(e);
+            const swallow = (p) => p.catch(error => {
+                this._handleConversionError(error);
                 return null;
             });
 
-            // If internal cache wanted and preloading enabled, convert now
             if (drawer.options.usePrivateCache && drawer.options.preloadCache) {
-                return swallow(selfPromise.then(_ => this.prepareInternalCacheAsync(drawer)));
+                return swallow(selfPromise.then(() => this.prepareInternalCacheAsync(drawer)));
             }
             return swallow(selfPromise);
         }
@@ -719,6 +841,7 @@
             this.loaded = false;
             this._promise = null;
             this._destroyed = false;
+            this._deferredRender = null;
 
             // Optional ownership metadata (set by TileCache for managed records).
             // Working caches created during invalidation are intentionally left without an owner.
@@ -731,6 +854,10 @@
          */
         destroy() {
             if (!this._destroyed) {
+                // Eviction must settle pending completion promises, never leave tile load hung.
+                if (this._deferredRender) {
+                    this._deferredRender.release();
+                }
                 delete this._conversionJobQueue;
                 this._destroyed = true;
 

@@ -346,7 +346,12 @@
   *     Pushes the "home" region in from the sides by the specified amounts.
   *     Possible subproperties (Numbers, in screen coordinates): left, top, right, bottom.
   *
-  * @property {Number} [imageLoaderLimit=0]
+  * @property {Boolean} [conversionBackpressure=false]
+   *     Experimental: schedule off-viewport tile cache format conversion and asynchronous
+   *     drawer preparation as idle work (with a bounded timeout). Tiles needed by the
+   *     current viewport are prepared immediately; network loading is unchanged.
+   *
+   * @property {Number} [imageLoaderLimit=0]
   *     The maximum number of image requests to make concurrently. By default
   *     it is set to 0 allowing the browser to make the maximum number of
   *     image requests in parallel as allowed by the browsers policy.
@@ -1521,6 +1526,7 @@ function OpenSeadragon( options ){
 
             //PERFORMANCE SETTINGS
             imageLoaderLimit:       0,
+            conversionBackpressure: false,
             maxImageCacheCount:     200,
             timeout:                30000,
             tileRetryMax:           0,
