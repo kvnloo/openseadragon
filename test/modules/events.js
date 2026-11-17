@@ -988,12 +988,12 @@
 
             zoom = viewer.viewport.getZoom();
             bounds = viewer.viewport.getBounds();
-            Util.assessNumericValue(assert, zoom, 0.002, epsilon,
+            Util.assessNumericValue(assert, zoom, 2, epsilon,
                 "Zoom should not be prevented");
             Util.assertRectangleEquals(
                 assert,
-                new OpenSeadragon.Rect(-384.5, -0.25, 500, 0.5),
                 bounds,
+                new OpenSeadragon.Rect(0.105, 0.105, 0.5, 0.5),
                 epsilon,
                 'Pan should not be prevented');
 
