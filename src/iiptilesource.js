@@ -44,10 +44,10 @@
    * @extends OpenSeadragon.TileSource
    * @see https://iipimage.sourceforge.io
    *
-   * @param {String} iipsrv               - IIPImage host server path (ex: "https://host/fcgi-bin/iipsrv.fcgi" or "/fcgi-bin/iipsrv.fcgi")
-   * @param {String} image                - Image path and name on server (ex: "image.tif")
-   * @param {String} format    (optional) - Tile output format (default: "jpg")
-   * @param {Object} transform (optional) - Object containing image processing transforms
+   * @param {String} iipsrv      - IIPImage host server path (ex: "https://host/fcgi-bin/iipsrv.fcgi" or "/fcgi-bin/iipsrv.fcgi")
+   * @param {String} image       - Image path and name on server (ex: "image.tif")
+   * @param {String} [format]    - Tile output format (default: "jpg")
+   * @param {Object} [transform] - Object containing image processing transforms
    *                                        (supported transform: "stack","quality","contrast","color","invert",
    *                                                              "colormap," "gamma","minmax","twist","hillshade".
    *                                        See https://iipimage.sourceforge.io/documentation/protocol for how to use)
@@ -101,7 +101,7 @@
      * this tile source.
      * @function
      * @param {Object|Array} data
-     * @param {String} optional - url
+     * @param {String} [url]
      */
     supports: function(data, url) {
       // Configuration must supply the IIP server endpoint and the image name
@@ -170,6 +170,14 @@
 
       const _this = this;
 
+      function safe(xhr, prop) {
+        try {
+          return xhr[prop];
+        } catch (e) {
+          return undefined;
+        }
+      }
+
       $.makeAjaxRequest( {
         url: url,
         type: "GET",
@@ -184,20 +192,13 @@
           }
           catch( e ) {
             const msg = "IIPTileSource: Error parsing IIP metadata: " + e.message;
-            function safe(prop) {
-              try {
-                return xhr[prop];
-              } catch (err) {
-                return undefined;
-              }
-            }
             _this.raiseEvent( 'open-failed', {
               message: msg,
               source: url,
               xhr: xhr,
-              status: safe('status'),
-              statusText: safe('statusText'),
-              responseText: safe('responseText'),
+              status: safe(xhr, 'status'),
+              statusText: safe(xhr, 'statusText'),
+              responseText: safe(xhr, 'responseText'),
               exception: e
             } );
           }
@@ -205,22 +206,13 @@
         error: function( xhr, exc ) {
           const msg = "IIPTileSource: Unable to get IIP metadata from " + url;
           $.console.error( msg );
-
-          function safe(prop) {
-            try {
-              return xhr[prop];
-            } catch (e) {
-              return undefined;
-            }
-          }
-
           _this.raiseEvent( 'open-failed', {
             message: msg,
             source: url,
             xhr: xhr,
-            status: safe('status'),
-            statusText: safe('statusText'),
-            responseText: safe('responseText'),
+            status: safe(xhr, 'status'),
+            statusText: safe(xhr, 'statusText'),
+            responseText: safe(xhr, 'responseText'),
             exception: exc || null
           } );
         }
