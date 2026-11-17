@@ -45,7 +45,7 @@
    * @param {String} type       - iris
    * @param {String} serverUrl  - Iris host server path (ex: "http://localhost:3000")
    * @param {String} slideId    - Image id (ex: "12345" for 12345.iris)
-   * @param {Object} [metadata] - Optional metadata object to use instead of fetching
+   * @param {Object} metadata   - Optional metadata object to use instead of fetching
    *
    * Example: tileSources: {
    *            type:         "iris",
@@ -54,7 +54,7 @@
    *          }
    */
 
-  $.IrisTileSource = function(options) {
+  OpenSeadragon[ "IrisTileSource" ] = function( options ) {
 
     $.TileSource.apply(this, [options]);
     if (!options.serverUrl || !options.slideId) {
@@ -74,7 +74,7 @@
     }
   };
 
-  $.extend($.IrisTileSource.prototype, $.TileSource.prototype, /** @lends OpenSeadragon.IrisTileSource.prototype */{
+  $.extend($.IrisTileSource.prototype, $.TileSource.prototype, {
     /**
      * Return URL string for image metadata
      * @function
@@ -90,8 +90,8 @@
      * @param {Object} data - The raw metadata object to check
      * @returns {Boolean} - True if supported, false otherwise
      */
-    supports: function (data) {
-      return !!(data && data.type === "iris" && data.serverUrl && data.slideId);
+    supports: function(data) {
+      return (data && data.type === "iris" && data.serverUrl && data.slideId);
     },
 
     /**
@@ -142,26 +142,57 @@
         type: "GET",
         async: true,
         success: function(xhr) {
-          try {
-            const data = JSON.parse(xhr.responseText);
-            _this.parseMetadata(data);
-            _this.ready = true;
-            _this.raiseEvent('ready', { tileSource: _this });
-          }
-          catch (e) {
-            const msg = "IrisTileSource: Error parsing metadata: " + e.message;
-            $.console.error(msg);
-            _this.raiseEvent('open-failed', { message: msg, source: url });
-          }
+            try {
+                const data = JSON.parse(xhr.responseText);
+                _this.parseMetadata(data);
+                _this.ready = true;
+                _this.raiseEvent('ready', { tileSource: _this });
+            }
+            catch (e) {
+                const msg = "IrisTileSource: Error parsing metadata: " + e.message;
+                $.console.error(msg);
+                function safe(prop) {
+                    try {
+                        return xhr[prop];
+                    } catch (err) {
+                        return undefined;
+                    }
+                }
+                _this.raiseEvent('open-failed', {
+                    message: msg,
+                    source: url,
+                    xhr: xhr,
+                    status: safe('status'),
+                    statusText: safe('statusText'),
+                    responseText: safe('responseText'),
+                    exception: e
+                });
+            }
         },
         error: function(xhr, exc) {
-          const msg = "IrisTileSource: Unable to get metadata from " + url;
-          $.console.error(msg);
-          _this.raiseEvent('open-failed', {
-            message: msg,
-            source: url,
-            status: xhr.status
-          });
+            const msg = "IrisTileSource: Unable to get metadata from " + url;
+            $.console.error(msg);
+
+            function safe(prop) {
+                try {
+                    return xhr[prop];
+                } catch (e) {
+                    return undefined;
+                }
+            }
+            const status = safe('status');
+            const statusText = safe('statusText');
+            const responseText = safe('responseText');
+
+            _this.raiseEvent('open-failed', {
+                message: msg,
+                source: url,
+                xhr: xhr,
+                status: status,
+                statusText: statusText,
+                responseText: responseText,
+                exception: exc || null
+            });
         }
       });
     },

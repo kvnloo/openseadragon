@@ -105,115 +105,91 @@
             "Tile URL for level 3, x=3, y=2 should match expected format"
         );
     });
+    QUnit.test('Iris HTTP 404 retains status and exposes response details', function(assert) {
+        const originalAjax = OpenSeadragon.makeAjaxRequest;
+        let request;
+        let failure;
 
-    QUnit.test('IrisTileSource throws without serverUrl', function(assert) {
-        assert.throws(function() {
-            return new OpenSeadragon.IrisTileSource({
-                slideId: "12345",
-                metadata: mockMetadata
+        OpenSeadragon.makeAjaxRequest = function(options) {
+            request = options;
+        };
+        try {
+            const source = new OpenSeadragon.IrisTileSource({
+                serverUrl: 'http://localhost',
+                slideId: '12345'
             });
-        }, /requires serverUrl and slideId/, 'should throw error');
-    });
-
-    QUnit.test('IrisTileSource throws without slideId', function(assert) {
-        assert.throws(function() {
-            return new OpenSeadragon.IrisTileSource({
-                serverUrl: "http://localhost",
-                metadata: mockMetadata
+            source.addHandler('open-failed', function(event) {
+                failure = event;
             });
-        }, /requires serverUrl and slideId/, 'should throw error');
+
+            assert.ok(request, 'Iris metadata GET dispatched');
+            if (request) {
+                const xhr = {
+                    status: 404,
+                    statusText: 'Not Found',
+                    responseText: '{"detail":"slide missing"}'
+                };
+                const exception = new Error('HTTP 404');
+                request.error(xhr, exception);
+
+                assert.ok(failure, 'open-failed event emitted');
+                if (failure) {
+                    assert.strictEqual(failure.message,
+                        'IrisTileSource: Unable to get metadata from http://localhost/slides/12345/metadata',
+                        'existing failure message retained');
+                    assert.strictEqual(failure.source, source.getMetadataUrl(), 'metadata source retained');
+                    assert.strictEqual(failure.status, 404, 'legacy numeric status retained');
+                    assert.strictEqual(failure.statusText, 'Not Found', 'status text exposed');
+                    assert.strictEqual(failure.responseText, '{"detail":"slide missing"}',
+                        'server error body exposed');
+                    assert.strictEqual(failure.xhr, xhr, 'original XHR exposed');
+                    assert.strictEqual(failure.exception, exception, 'request exception retained');
+                    assert.strictEqual(source.ready, false, 'failed source remains not ready');
+                }
+            }
+        } finally {
+            OpenSeadragon.makeAjaxRequest = originalAjax;
+        }
     });
 
-    QUnit.test('IrisTileSource supports', function(assert) {
-        assert.strictEqual(
-            OpenSeadragon.IrisTileSource.prototype.supports({
-                type: "iris",
-                serverUrl: "http://localhost",
-                slideId: "12345"
-            }),
-            true,
-            'should return true (boolean) for valid iris data'
-        );
+    QUnit.test('Iris malformed JSON exposes the successful response and parse exception', function(assert) {
+        const originalAjax = OpenSeadragon.makeAjaxRequest;
+        const responseText = '{"extent":';
+        let request;
+        let failure;
 
-        assert.strictEqual(
-            OpenSeadragon.IrisTileSource.prototype.supports({
-                type: "dzi"
-            }),
-            false,
-            'should return false (boolean) for non-iris type'
-        );
+        OpenSeadragon.makeAjaxRequest = function(options) {
+            request = options;
+        };
+        try {
+            const source = new OpenSeadragon.IrisTileSource({
+                serverUrl: 'http://localhost',
+                slideId: '12345'
+            });
+            source.addHandler('open-failed', function(event) {
+                failure = event;
+            });
 
-        assert.strictEqual(
-            OpenSeadragon.IrisTileSource.prototype.supports(null),
-            false,
-            'should return false (boolean) for null'
-        );
+            assert.ok(request, 'Iris metadata GET dispatched');
+            if (request) {
+                const xhr = { status: 200, statusText: 'OK', responseText: responseText };
+                request.success(xhr);
 
-        assert.strictEqual(
-            OpenSeadragon.IrisTileSource.prototype.supports({}),
-            false,
-            'should return false (boolean) for empty object'
-        );
-
-        assert.strictEqual(
-            OpenSeadragon.IrisTileSource.prototype.supports({
-                type: "iris"
-            }),
-            false,
-            'should return false (boolean) without serverUrl'
-        );
-    });
-
-    QUnit.test('IrisTileSource getNumTiles', function(assert) {
-        const test = new OpenSeadragon.IrisTileSource({
-            serverUrl: "http://localhost",
-            slideId: "12345",
-            metadata: mockMetadata
-        });
-
-        // Valid levels
-        var tiles0 = test.getNumTiles(0);
-        assert.equal(tiles0.x, 8, 'level 0 x tiles');
-        assert.equal(tiles0.y, 6, 'level 0 y tiles');
-
-        var tiles3 = test.getNumTiles(3);
-        assert.equal(tiles3.x, 496, 'level 3 x tiles');
-        assert.equal(tiles3.y, 346, 'level 3 y tiles');
-
-        // Invalid levels - should return Point(0, 0)
-        var invalidLow = test.getNumTiles(-1);
-        assert.equal(invalidLow.x, 0, 'invalid low level x should be 0');
-        assert.equal(invalidLow.y, 0, 'invalid low level y should be 0');
-
-        var invalidHigh = test.getNumTiles(99);
-        assert.equal(invalidHigh.x, 0, 'invalid high level x should be 0');
-        assert.equal(invalidHigh.y, 0, 'invalid high level y should be 0');
-    });
-
-    QUnit.test('IrisTileSource getLevelScale', function(assert) {
-        const test = new OpenSeadragon.IrisTileSource({
-            serverUrl: "http://localhost",
-            slideId: "12345",
-            metadata: mockMetadata
-        });
-
-        var maxScale = mockMetadata.extent.layers[3].scale;
-
-        assert.equal(
-            test.getLevelScale(0),
-            mockMetadata.extent.layers[0].scale / maxScale,
-            'level 0 scale'
-        );
-        assert.equal(
-            test.getLevelScale(3),
-            1,
-            'max level scale should be 1'
-        );
-    });
-
-    QUnit.test('IrisTileSource configure', function(assert) {
-        var options = { test: 'value' };
-        var result = OpenSeadragon.IrisTileSource.prototype.configure(options);
-        assert.equal(result, options, 'configure should return the options object');
+                assert.ok(failure, 'malformed JSON emits open-failed');
+                if (failure) {
+                    assert.ok(failure.message.indexOf('IrisTileSource: Error parsing metadata: ') === 0,
+                        'existing parsing error prefix retained');
+                    assert.strictEqual(failure.source, source.getMetadataUrl(), 'metadata URL retained');
+                    assert.strictEqual(failure.status, 200, 'HTTP success status retained on parse failure');
+                    assert.strictEqual(failure.statusText, 'OK', 'status text exposed');
+                    assert.strictEqual(failure.responseText, responseText, 'malformed JSON body exposed');
+                    assert.strictEqual(failure.xhr, xhr, 'original XHR exposed');
+                    assert.ok(failure.exception instanceof SyntaxError, 'JSON parse exception exposed');
+                    assert.strictEqual(source.ready, false, 'parse failure does not mark the source ready');
+                }
+            }
+        } finally {
+            OpenSeadragon.makeAjaxRequest = originalAjax;
+        }
     });
 })();

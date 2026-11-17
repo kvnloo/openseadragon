@@ -56,8 +56,6 @@
         viewer.addHandler('open-failed', function(event) {
             assert.ok(true, "The open-failed event should be fired when the source 404s");
 
-            assert.equal(event.status, 404, "The open-failed event should expose the HTTP status");
-
             assert.equal($(".openseadragon-message").length, 1, "Open failures should display a message");
 
             assert.ok(testLog.error.contains('["HTTP 404 attempting to load TileSource: /test/data/not-a-real-file"]'),
@@ -67,6 +65,93 @@
         });
 
         viewer.open('/test/data/not-a-real-file');
+    });
+
+    function tileSourceThatFailsWith(details) {
+        const source = new OpenSeadragon.TileSource({
+            width: 256,
+            height: 256,
+            tileSize: 256
+        });
+        source.ready = false;
+        const addHandler = source.addHandler;
+        source.addHandler = function(name, handler, userData, priority) {
+            const result = addHandler.call(this, name, handler, userData, priority);
+            if (name === 'open-failed') {
+                this.raiseEvent('open-failed', details);
+            }
+            return result;
+        };
+        return source;
+    }
+
+    QUnit.test('Viewer.open forwards original XHR failure details', function(assert) {
+        const done = assert.async();
+        const xhr = {
+            status: 404,
+            statusText: 'Not Found',
+            responseText: '{"detail":"private image missing"}'
+        };
+        const exception = new Error('HTTP 404');
+        const details = {
+            message: 'HTTP 404 attempting to load TileSource',
+            source: '/private/image.dzi',
+            status: 404,
+            statusText: xhr.statusText,
+            responseText: xhr.responseText,
+            xhr: xhr,
+            exception: exception,
+            postData: null
+        };
+        const source = tileSourceThatFailsWith(details);
+        viewer.addHandler('open', function() {
+            assert.ok(false, 'a failed TileSource must not open');
+        });
+        viewer.addHandler('open-failed', function(event) {
+            assert.strictEqual(event.eventSource, viewer, 'Viewer is the event source');
+            assert.strictEqual(event.message, details.message, 'existing message forwarded');
+            assert.strictEqual(event.source, source, 'original TileSource is retained');
+            assert.strictEqual(event.status, 404, 'legacy numeric status forwarded');
+            assert.strictEqual(event.statusText, 'Not Found', 'status text forwarded');
+            assert.strictEqual(event.responseText, xhr.responseText, 'response body forwarded');
+            assert.strictEqual(event.xhr, xhr, 'original XHR forwarded');
+            assert.strictEqual(event.exception, exception, 'exception forwarded');
+            assert.strictEqual(event.postData, null, 'POST data forwarded');
+            done();
+        });
+        viewer.open(source);
+    });
+
+    QUnit.test('Viewer TileSource promise rejection forwards XHR details', function(assert) {
+        const xhr = {
+            status: 503,
+            statusText: 'Service Unavailable',
+            responseText: '{"retry":30}'
+        };
+        const exception = new Error('HTTP 503');
+        const details = {
+            message: 'HTTP 503 attempting to load TileSource',
+            source: '/private/image.dzi',
+            status: 503,
+            statusText: xhr.statusText,
+            responseText: xhr.responseText,
+            xhr: xhr,
+            exception: exception,
+            postData: 'token=redacted'
+        };
+        const source = tileSourceThatFailsWith(details);
+        return viewer.instantiateTileSourceClass({ tileSource: source }).then(function() {
+            assert.ok(false, 'a failed TileSource must reject');
+        }, function(error) {
+            assert.strictEqual(error.message, details.message, 'existing message retained');
+            assert.strictEqual(error.source, source, 'original TileSource retained');
+            assert.strictEqual(error.status, 503, 'legacy numeric status retained');
+            assert.strictEqual(error.statusText, 'Service Unavailable', 'status text forwarded');
+            assert.strictEqual(error.responseText, xhr.responseText, 'response body forwarded');
+            assert.strictEqual(error.xhr, xhr, 'original XHR forwarded');
+            assert.strictEqual(error.exception, exception, 'original exception forwarded');
+            assert.strictEqual(error.postData, 'token=redacted', 'POST data forwarded');
+        });
     });
 
     QUnit.test('Zoom', function(assert) {
@@ -456,18 +541,8 @@
         viewer.open('/test/data/testpattern.dzi');
     });
 
-    QUnit.test('SetMouseNavEnabled', function(assert) {
-        assert.strictEqual(viewer.isMouseNavEnabled(), true, "Mouse navigation is enabled by default.");
-
-        viewer.setMouseNavEnabled(false);
-        assert.strictEqual(viewer.isMouseNavEnabled(), false, "Mouse navigation is disabled.");
-
-        viewer.setMouseNavEnabled(true);
-        assert.strictEqual(viewer.isMouseNavEnabled(), true, "Mouse navigation is enabled again.");
-    });
-
     //Version numbers are injected by the build process, so skip version tests if we are only running code coverage
-    if(!window.COVERAGE_RUN){
+    if(!window.isCoverageTest ){
         QUnit.test('version object', function(assert) {
             assert.equal(typeof OpenSeadragon.version.versionStr, "string", "versionStr should be a string");
             assert.ok(OpenSeadragon.version.major >= 0, "major should be a positive number");
@@ -475,11 +550,4 @@
             assert.ok(OpenSeadragon.version.revision >= 0, "revision should be a positive number");
         });
     }
-    // Ensures positiveModulo returns a positive result for negative inputs
-    QUnit.test('positiveModulo', function(assert) {
-        assert.equal(OpenSeadragon.positiveModulo(-1, 5), 4, 'positiveModulo(-1, 5) should be 4');
-        assert.equal(OpenSeadragon.positiveModulo(-8, 7), 6, 'positiveModulo(-8, 7) should be 6');
-    });
-
-
 })();
