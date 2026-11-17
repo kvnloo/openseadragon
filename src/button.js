@@ -62,6 +62,7 @@ $.ButtonState = {
  * @extends OpenSeadragon.EventSource
  * @param {Object} options
  * @param {Element} [options.element=null] Element to use as the button. If not specified, an HTML &lt;button&gt; element is created.
+ * @param {Boolean} [options.preserveElementStyle=false] Keep the display and position styles of a supplied element unchanged.
  * @param {String} [options.tooltip=null] Provides context help for the button when the
  *  user hovers over it.
  * @param {String} [options.srcRest=null] URL of image to use in 'rest' state.
@@ -88,6 +89,7 @@ $.Button = function( options ) {
     $.extend( true, this, {
 
         tooltip:            null,
+        preserveElementStyle: false,
         srcRest:            null,
         srcGroup:           null,
         srcHover:           null,
@@ -200,8 +202,10 @@ $.Button = function( options ) {
     // Whether this button should fade after user stops interacting with the viewport.
     this.shouldFade     = false;
 
-    this.element.style.display  = "inline-block";
-    this.element.style.position = "relative";
+    if ( !this._isCustomElement || !this.preserveElementStyle ) {
+        this.element.style.display  = "inline-block";
+        this.element.style.position = "relative";
+    }
     this.element.title          = this.tooltip;
 
     /**
