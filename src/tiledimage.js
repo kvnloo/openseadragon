@@ -98,7 +98,7 @@
  * @param {Boolean} [options.loadTilesWithAjax]
  *      Whether to load tile data using AJAX requests.
  *      Defaults to the setting in {@link OpenSeadragon.Options}.
- * @param {Object} [options.ajaxHeaders={}]
+ * @param {Object|Function} [options.ajaxHeaders={}]
  *      A set of headers to include when making tile AJAX requests.
  * @param {string|string[]} [options.originalDataType=undefined]
  *      A default format to convert tiles to at the beginning. The format is the base tile format,
@@ -1387,15 +1387,16 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
      * the headers here in the tiled image (`TiledImage.ajaxHeaders`).
      *
      * @function
-     * @param {Object} ajaxHeaders Updated AJAX headers, which will be merged over any headers specified in {@link OpenSeadragon.Options}.
+     * @param {Object|Function} ajaxHeaders Updated AJAX headers or a zero-argument provider,
+     *     merged over headers specified in {@link OpenSeadragon.Options}.
      * @param {Boolean} [propagate=true] Whether to propagate updated headers to existing tiles and queued image loader jobs.
      */
     setAjaxHeaders: function(ajaxHeaders, propagate) {
         if (ajaxHeaders === null) {
             ajaxHeaders = {};
         }
-        if (!$.isPlainObject(ajaxHeaders)) {
-            $.console.error('[TiledImage.setAjaxHeaders] Ignoring invalid headers, must be a plain object');
+        if (!$.isPlainObject(ajaxHeaders) && !$.isFunction(ajaxHeaders)) {
+            $.console.error('[TiledImage.setAjaxHeaders] Ignoring invalid headers, must be a plain object or function');
             return;
         }
 
@@ -1420,8 +1421,12 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
             propagate = true;
         }
 
-        // merge with viewer's headers
-        if ($.isPlainObject(this.viewer.ajaxHeaders)) {
+        // Keep providers lazy; resolve them for each new tile or explicit propagation.
+        if ($.isFunction(this.viewer.ajaxHeaders) || $.isFunction(this._ownAjaxHeaders)) {
+            const viewerHeaders = this.viewer.ajaxHeaders;
+            const imageHeaders = this._ownAjaxHeaders;
+            this.ajaxHeaders = () => $.resolveAjaxHeaders(viewerHeaders, imageHeaders);
+        } else if ($.isPlainObject(this.viewer.ajaxHeaders)) {
             this.ajaxHeaders = $.extend({}, this.viewer.ajaxHeaders, this._ownAjaxHeaders);
         } else {
             this.ajaxHeaders = this._ownAjaxHeaders;
@@ -1445,7 +1450,7 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
                         tile.loadWithAjax = this.loadTilesWithAjax;
                         if (tile.loadWithAjax) {
                             const tileAjaxHeaders = this.source.getTileAjaxHeaders( level, xMod, yMod );
-                            tile.ajaxHeaders = $.extend({}, this.ajaxHeaders, tileAjaxHeaders);
+                            tile.ajaxHeaders = $.resolveAjaxHeaders(this.ajaxHeaders, tileAjaxHeaders);
                         } else {
                             tile.ajaxHeaders = null;
                         }
@@ -2206,11 +2211,11 @@ $.extend($.TiledImage.prototype, $.EventSource.prototype, /** @lends OpenSeadrag
 
             // Headers are only applicable if loadTilesWithAjax is set
             if (this.loadTilesWithAjax) {
-                ajaxHeaders = tileSource.getTileAjaxHeaders( level, xMod, yMod );
-                // Combine tile AJAX headers with tiled image AJAX headers (if applicable)
-                if ($.isPlainObject(this.ajaxHeaders)) {
-                    ajaxHeaders = $.extend({}, this.ajaxHeaders, ajaxHeaders);
-                }
+                // Resolve providers once for this tile. The effective headers also
+                // determine its cache identity, keeping different tokens isolated.
+                ajaxHeaders = $.resolveAjaxHeaders(
+                    this.ajaxHeaders, tileSource.getTileAjaxHeaders(level, xMod, yMod)
+                );
             } else {
                 ajaxHeaders = null;
             }

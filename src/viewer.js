@@ -1401,15 +1401,16 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
      * `TiledImage.ajaxHeaders`, which take precedence over the headers here in the viewer.
      *
      * @function
-     * @param {Object} ajaxHeaders Updated AJAX headers.
+     * @param {Object|Function} ajaxHeaders Updated AJAX headers, or a zero-argument
+     *     function returning a plain object when each request is prepared.
      * @param {Boolean} [propagate=true] Whether to propagate updated headers to tiled images, etc.
      */
     setAjaxHeaders: function(ajaxHeaders, propagate) {
         if (ajaxHeaders === null) {
             ajaxHeaders = {};
         }
-        if (!$.isPlainObject(ajaxHeaders)) {
-            $.console.error('[Viewer.setAjaxHeaders] Ignoring invalid headers, must be a plain object');
+        if (!$.isPlainObject(ajaxHeaders) && !$.isFunction(ajaxHeaders)) {
+            $.console.error('[Viewer.setAjaxHeaders] Ignoring invalid headers, must be a plain object or function');
             return;
         }
         if (propagate === undefined) {
@@ -1865,8 +1866,8 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
      * @property {Boolean} [options.loadTilesWithAjax]
      *      Whether to load tile data using AJAX requests.
      *      Defaults to the setting in {@link OpenSeadragon.Options}.
-     * @property {Object} [options.ajaxHeaders]
-     *      A set of headers to include when making tile AJAX requests.
+     * @property {Object|Function} [options.ajaxHeaders]
+     *      A set of headers or a zero-argument function returning headers for each AJAX request.
      *      Note that these headers will be merged over any headers specified in {@link OpenSeadragon.Options}.
      *      Specifying a falsy value for a header will clear its existing value set at the Viewer level (if any).
      * @property {Function} [options.success] A function that gets called when the image is
@@ -2151,7 +2152,7 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
             if (options.loadTilesWithAjax === undefined) {
                 options.loadTilesWithAjax = this.loadTilesWithAjax;
             }
-            if (!$.isPlainObject(options.ajaxHeaders)) {
+            if (!$.isPlainObject(options.ajaxHeaders) && !$.isFunction(options.ajaxHeaders)) {
                 options.ajaxHeaders = {};
             }
 
@@ -2201,7 +2202,9 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
                         crossOriginPolicy: options.crossOriginPolicy !== undefined ?
                             options.crossOriginPolicy : this.crossOriginPolicy,
                         ajaxWithCredentials: this.ajaxWithCredentials,
-                        ajaxHeaders: $.extend({}, this.ajaxHeaders, options.ajaxHeaders),
+                        ajaxHeaders: $.isFunction(this.ajaxHeaders) || $.isFunction(options.ajaxHeaders) ?
+                            () => $.resolveAjaxHeaders(this.ajaxHeaders, options.ajaxHeaders) :
+                            $.extend({}, this.ajaxHeaders, options.ajaxHeaders),
                         splitHashDataForPost: this.splitHashDataForPost,
                     });
                     waitUntilReady(tileSource, tileSource);
