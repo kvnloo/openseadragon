@@ -178,6 +178,50 @@
         viewer.open('/test/data/testpattern.dzi');
     });
 
+    QUnit.test('Viewer: hidden viewer pauses updates and resumes when visible (#1282)', function(assert) {
+        const done = assert.async();
+        viewer.element.style.width = '400px';
+        viewer.element.style.height = '300px';
+
+        viewer.addHandler('open', function() {
+            let viewportChanges = 0;
+            viewer.addHandler('viewport-change', function() {
+                viewportChanges++;
+            });
+
+            // Queue a real spring animation, then hide before the next update frame.
+            viewer.viewport.zoomTo(2);
+            viewer.element.style.display = 'none';
+            assert.strictEqual(viewer.container.clientWidth, 0, 'Hidden viewer has zero width');
+            assert.strictEqual(viewer.container.clientHeight, 0, 'Hidden viewer has zero height');
+
+            // Two animation frames allow the Viewer's normal update loop to run.
+            // No timer sleeps or synthetic update calls are needed.
+            const afterFrames = function(callback) {
+                OpenSeadragon.requestAnimationFrame(function() {
+                    OpenSeadragon.requestAnimationFrame(callback);
+                });
+            };
+
+            afterFrames(function() {
+                assert.strictEqual(viewportChanges, 0, 'No viewport animation updates while hidden');
+
+                viewer.element.style.display = '';
+                viewer.forceResize();
+                assert.ok(viewer.container.clientWidth > 0, 'Viewer has width after showing');
+                assert.ok(viewer.container.clientHeight > 0, 'Viewer has height after showing');
+
+                afterFrames(function() {
+                    assert.ok(viewportChanges > 0, 'Pending viewport animation resumes when visible');
+                    done();
+                });
+            });
+        });
+
+        viewer.open('/test/data/testpattern.dzi');
+    });
+
+    // ----------
     QUnit.test('FullPage', function(assert) {
         const done = assert.async();
         viewer.addHandler("open", function () {
