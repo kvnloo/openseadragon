@@ -2202,6 +2202,7 @@ $.extend( $.Viewer.prototype, $.EventSource.prototype, $.ControlDock.prototype, 
                             options.crossOriginPolicy : this.crossOriginPolicy,
                         ajaxWithCredentials: this.ajaxWithCredentials,
                         ajaxHeaders: $.extend({}, this.ajaxHeaders, options.ajaxHeaders),
+                        timeout: this.timeout,
                         splitHashDataForPost: this.splitHashDataForPost,
                     });
                     waitUntilReady(tileSource, tileSource);

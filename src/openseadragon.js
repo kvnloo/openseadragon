@@ -557,7 +557,7 @@
   *     The max number of images we should keep in memory (per drawer).
   *
   * @property {Number} [timeout=30000]
-  *     The max number of milliseconds that an image job may take to complete.
+  *     The max number of milliseconds that an image job or tile source metadata request may take to complete.
   *
   * @property {Number} [tileRetryMax=0]
   *     The max number of retries when a tile download fails. By default it's 0, so retries are disabled.
@@ -2456,6 +2456,7 @@ function OpenSeadragon( options ){
          * @param {String} options.responseType - the response type of the AJAX request
          * @param {String} options.postData - HTTP POST data (usually but not necessarily in k=v&k2=v2... form,
          *      see TileSource::getTilePostData), GET method used if null
+         * @param {Number} [options.timeout] - maximum time in milliseconds for the AJAX request
          * @param {Boolean} [options.withCredentials=false] - whether to set the XHR's withCredentials
          * @throws {Error}
          * @returns {XMLHttpRequest}
@@ -2465,6 +2466,7 @@ function OpenSeadragon( options ){
             let headers;
             let responseType;
             let postData;
+            let timeout;
 
             // Note that our preferred API is that you pass in a single object; the named
             // arguments are for legacy support.
@@ -2475,6 +2477,7 @@ function OpenSeadragon( options ){
                 headers = url.headers;
                 responseType = url.responseType || null;
                 postData = url.postData || null;
+                timeout = url.timeout;
                 url = url.url;
             } else {
                 $.console.warn("OpenSeadragon.makeAjaxRequest() deprecated usage!");
@@ -2515,6 +2518,10 @@ function OpenSeadragon( options ){
 
                 if (responseType) {
                     request.responseType = responseType;
+                }
+
+                if (timeout !== undefined) {
+                    request.timeout = timeout;
                 }
 
                 if (headers) {

@@ -48,6 +48,8 @@
  *      the XHR's withCredentials (for accessing secure data).
  * @property {Object} [options.ajaxHeaders]
  *      A set of headers to include in AJAX requests.
+ * @property {Number} [options.timeout]
+ *      Timeout in milliseconds for the AJAX request used to load TileSource metadata.
  * @property {Boolean} [options.splitHashDataForPost]
  *      First occurrence of '#' in the options.url is used to split URL
  *      and the latter part is treated as POST data (applies to getImageInfo(...))
@@ -532,6 +534,7 @@ $.TileSource.prototype = {
                 postData: postData,
                 withCredentials: this.ajaxWithCredentials,
                 headers: this.ajaxHeaders,
+                timeout: this.timeout,
                 success: function( xhr ) {
                     const data = processResponse( xhr );
                     callback( data );
