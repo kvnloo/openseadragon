@@ -31,6 +31,7 @@
         const buttonEvents = [];
         const tracker = new OpenSeadragon.MouseTracker( {
             element: element,
+            startDisabled: true,
             nonPrimaryPressHandler: function ( event ) {
                 buttonEvents.push( { type: 'press', button: event.button, buttons: event.buttons } );
             },
@@ -38,6 +39,8 @@
                 buttonEvents.push( { type: 'release', button: event.button, buttons: event.buttons } );
             }
         } );
+        const havePointerEvents = OpenSeadragon.MouseTracker.havePointerEvents;
+        const subscribeEvents = OpenSeadragon.MouseTracker.subscribeEvents;
 
         const dispatch = function ( type, button, buttons ) {
             element.dispatchEvent( new PointerEvent( type, {
@@ -53,28 +56,37 @@
             } ) );
         };
 
-        // Right down, left down, right up, then repeat while left remains down.
-        // Pointer Events only dispatch pointermove for the chorded transitions.
-        dispatch( 'pointerenter', -1, 0 );
-        dispatch( 'pointerdown', 2, 2 );
-        dispatch( 'pointermove', -1, 3 );
-        dispatch( 'pointermove', -1, 1 );
-        dispatch( 'pointermove', -1, 1 ); // Unchanged buttons must not cause duplicates.
-        dispatch( 'pointermove', -1, 3 );
-        dispatch( 'pointermove', -1, 1 );
+        try {
+            OpenSeadragon.MouseTracker.havePointerEvents = true;
+            OpenSeadragon.MouseTracker.subscribeEvents = [ 'pointerenter', 'pointerleave', 'pointerdown', 'pointermove' ];
+            tracker.setTracking( true );
 
-        assert.deepEqual( buttonEvents, [
-            { type: 'press', button: 2, buttons: 2 },
-            { type: 'release', button: 2, buttons: 1 },
-            { type: 'press', button: 2, buttons: 3 },
-            { type: 'release', button: 2, buttons: 1 }
-        ], 'each right-button transition is reported exactly once' );
-        assert.strictEqual( tracker.getActivePointersListByType( 'mouse' ).buttons, 1,
-            'the left button remains pressed after right release' );
+            // Right down, left down, right up, then repeat while left remains down.
+            // Pointer Events only dispatch pointermove for the chorded transitions.
+            dispatch( 'pointerenter', -1, 0 );
+            dispatch( 'pointerdown', 2, 2 );
+            dispatch( 'pointermove', -1, 3 );
+            dispatch( 'pointermove', -1, 1 );
+            dispatch( 'pointermove', -1, 1 ); // Unchanged buttons must not cause duplicates.
+            dispatch( 'pointermove', -1, 3 );
+            dispatch( 'pointermove', -1, 1 );
 
-        dispatch( 'pointerleave', -1, 1 );
-        assert.strictEqual( tracker.getActivePointerCount(), 0, 'pointer is cleaned up on leave' );
-        tracker.destroy();
+            assert.deepEqual( buttonEvents, [
+                { type: 'press', button: 2, buttons: 2 },
+                { type: 'release', button: 2, buttons: 1 },
+                { type: 'press', button: 2, buttons: 3 },
+                { type: 'release', button: 2, buttons: 1 }
+            ], 'each right-button transition is reported exactly once' );
+            assert.strictEqual( tracker.getActivePointersListByType( 'mouse' ).buttons, 1,
+                'the left button remains pressed after right release' );
+
+            dispatch( 'pointerleave', -1, 1 );
+            assert.strictEqual( tracker.getActivePointerCount(), 0, 'pointer is cleaned up on leave' );
+        } finally {
+            tracker.destroy();
+            OpenSeadragon.MouseTracker.havePointerEvents = havePointerEvents;
+            OpenSeadragon.MouseTracker.subscribeEvents = subscribeEvents;
+        }
     } );
 
     // ----------
